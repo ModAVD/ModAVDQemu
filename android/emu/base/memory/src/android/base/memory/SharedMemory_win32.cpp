@@ -25,19 +25,13 @@ SharedMemory::SharedMemory(const std::string& name, size_t size) : mSize(size) {
     if (name.find(kFileUri, 0) == 0) {
         // Convert URI to path using win32 api.
         const Win32UnicodeString srcUri(name);
-        WCHAR path[MAX_PATH] = {0};
+        WCHAR path[MAX_PATH];
         DWORD cPath = MAX_PATH;
         auto HR = PathCreateFromUrlW(srcUri.c_str(), path, &cPath, NULL);
-        mShareType = ShareType::FILE_BACKED;
-        if (HR != S_OK) {
-            // MAS: the assert that used to be here is compiled out in release
-            // builds, so an unparsable URI continued with an uninitialized
-            // |path|. Leave mName empty; openInternal() rejects it.
-            mName.clear();
-            return;
-        }
+        assert(HR == S_OK);
         const Win32UnicodeString destPath(path);
         mName = PathUtils::recompose(PathUtils::decompose(destPath.toString()));
+        mShareType = ShareType::FILE_BACKED;
     } else {
         mShareType = ShareType::SHARED_MEMORY;
         mName = "SHM_" + name;
@@ -63,10 +57,6 @@ int SharedMemory::open(AccessMode access) {
 int SharedMemory::openInternal(AccessMode access, bool doMapping) {
     if (mCreate) {
         return EEXIST;
-    }
-    if (mName.empty()) {
-        // MAS: file:// URI that PathCreateFromUrlW could not convert.
-        return -ERROR_INVALID_NAME;
     }
     LARGE_INTEGER memory;
     memory.QuadPart = (LONGLONG)mSize;
@@ -96,9 +86,6 @@ int SharedMemory::openInternal(AccessMode access, bool doMapping) {
                             FILE_FLAG_RANDOM_ACCESS, NULL);
         if (mFile == INVALID_HANDLE_VALUE) {
             int err = -GetLastError();
-            // MAS: don't hand INVALID_HANDLE_VALUE (== the current-process
-            // pseudo handle) to CloseHandle() in close().
-            mFile = invalidHandle();
             close();
             return err;
         }
