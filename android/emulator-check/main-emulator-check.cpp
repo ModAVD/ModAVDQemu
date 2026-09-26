@@ -20,7 +20,12 @@
 #include <utility>
 #ifdef _WIN32
 #include <windows.h>
+// The DISM API ships with the Windows ADK, not the Windows SDK; without it the
+// whpx feature commands just report that they are unavailable.
+#if __has_include(<dismapi.h>)
 #include <dismapi.h>
+#define HAVE_DISMAPI 1
+#endif
 #endif
 
 #include "aemu/base/Optional.h"
@@ -217,7 +222,15 @@ static CommandReturn getDesktopEnv() {
     return std::make_pair(name.empty() ? kGenericError : 0, name);
 }
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(HAVE_DISMAPI)
+static CommandReturn dismUnavailable() {
+    return std::make_pair(kGenericError,
+                          "emulator-check was built without the DISM API (Windows ADK).");
+}
+static CommandReturn checkWHPX() { return dismUnavailable(); }
+static CommandReturn enableWHPX() { return dismUnavailable(); }
+static CommandReturn disableWHPX() { return dismUnavailable(); }
+#elif defined(_WIN32)
 static CommandReturn dismOpen(DismSession *session) {
     HRESULT hr;
 
