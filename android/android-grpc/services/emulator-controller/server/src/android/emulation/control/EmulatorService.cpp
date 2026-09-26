@@ -1092,8 +1092,26 @@ public:
             return Status::CANCELLED;
         }
 
+        // MAS: reject MMAP handles that cannot name a mapping before doing any
+        // work. Official 37.1.11 lacked the isOpen()/isMapped() check below and
+        // read the framebuffer into an unrelated heap block for a bare Windows
+        // path ("C:\...") or "file:///C%3A/..." -> heap overflow, the emulator
+        // froze or died without a log.
+        if (request->transport().channel() == ImageTransport::MMAP) {
+            const std::string& handle = request->transport().handle();
+            const bool isFileUri = handle.rfind("file://", 0) == 0;
+            if (handle.empty() ||
+                (!isFileUri &&
+                 handle.find_first_of("\\/:") != std::string::npos)) {
+                return Status(::grpc::StatusCode::INVALID_ARGUMENT,
+                              "MMAP handle must be a file:///C:/... URI or a "
+                              "plain shared memory name, got: " +
+                                      handle);
+            }
+        }
+
         std::shared_ptr<SharedMemory> shm;
-        uint8_t* pixels;
+        uint8_t* pixels = nullptr;
         size_t cPixels = 0;
         bool isPNG = request->format() ==
                      ImageFormat_ImgFormat::ImageFormat_ImgFormat_PNG;
