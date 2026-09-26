@@ -654,7 +654,12 @@ std::vector<std::pair<std::string, std::string>> getUserspaceBootProperties(
 
             params.push_back({androidbootLogcatProp, param});
         } else {
-            params.push_back({androidbootLogcatProp, "*:V"});
+            // MAS: without -logcat the host end of the logcat console (hvc1)
+            // is a null chardev, yet "*:V" made the guest's goldfish-logcat
+            // service format and push every log line through virtio-console.
+            // "*:S" keeps the service but has it write nothing. adb logcat
+            // is unaffected (it reads logd directly).
+            params.push_back({androidbootLogcatProp, "*:S"});
         }
     }
 
