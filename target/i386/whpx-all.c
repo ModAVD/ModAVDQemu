@@ -1123,6 +1123,81 @@ static void whpx_vcpu_process_async_events(CPUState *cpu)
     return;
 }
 
+/*
+ * MAS: optional VM-exit statistics (ANDROID_EMU_WHPX_EXIT_STATS=1). Every
+ * ~5 s prints the number of exits per reason since the last report, with
+ * MMIO split by the device it hit (HPET / local APIC / IOAPIC / other), to
+ * tell which trap is hot before optimizing it. Off by default: then it costs
+ * one predictable branch per exit.
+ */
+enum {
+    WXS_MMIO_HPET, WXS_MMIO_LAPIC, WXS_MMIO_IOAPIC, WXS_MMIO_OTHER,
+    WXS_PIO, WXS_HALT, WXS_IRQ_WINDOW, WXS_CANCELED, WXS_MSR, WXS_CPUID,
+    WXS_OTHER, WXS_COUNT
+};
+static const char *const whpx_exit_stat_names[WXS_COUNT] = {
+    "mmio-hpet", "mmio-lapic", "mmio-ioapic", "mmio-other",
+    "pio", "halt", "irq-window", "canceled", "msr", "cpuid", "other"
+};
+static uint64_t whpx_exit_stats[WXS_COUNT];
+static uint64_t whpx_exit_stats_last_ms;
+static int whpx_exit_stats_on = -1;
+
+static void whpx_exit_stats_account(const WHV_RUN_VP_EXIT_CONTEXT *ctx)
+{
+    int k;
+    uint64_t now, last;
+
+    if (whpx_exit_stats_on < 0) {
+        const char *e = getenv("ANDROID_EMU_WHPX_EXIT_STATS");
+        atomic_set(&whpx_exit_stats_last_ms, GetTickCount64());
+        whpx_exit_stats_on = (e && e[0] == '1');
+    }
+    if (!whpx_exit_stats_on) {
+        return;
+    }
+
+    switch (ctx->ExitReason) {
+    case WHvRunVpExitReasonMemoryAccess: {
+        uint64_t gpa = ctx->MemoryAccess.Gpa;
+        if (gpa >= 0xfed00000ULL && gpa < 0xfed00400ULL) {
+            k = WXS_MMIO_HPET;
+        } else if (gpa >= 0xfee00000ULL && gpa < 0xfee01000ULL) {
+            k = WXS_MMIO_LAPIC;
+        } else if (gpa >= 0xfec00000ULL && gpa < 0xfec01000ULL) {
+            k = WXS_MMIO_IOAPIC;
+        } else {
+            k = WXS_MMIO_OTHER;
+        }
+        break;
+    }
+    case WHvRunVpExitReasonX64IoPortAccess: k = WXS_PIO; break;
+    case WHvRunVpExitReasonX64Halt: k = WXS_HALT; break;
+    case WHvRunVpExitReasonX64InterruptWindow: k = WXS_IRQ_WINDOW; break;
+    case WHvRunVpExitReasonCanceled: k = WXS_CANCELED; break;
+    case WHvRunVpExitReasonX64MsrAccess: k = WXS_MSR; break;
+    case WHvRunVpExitReasonX64Cpuid: k = WXS_CPUID; break;
+    default: k = WXS_OTHER; break;
+    }
+    atomic_inc(&whpx_exit_stats[k]);
+
+    now = GetTickCount64();
+    last = atomic_read(&whpx_exit_stats_last_ms);
+    if (now - last >= 5000 &&
+        atomic_cmpxchg(&whpx_exit_stats_last_ms, last, now) == last) {
+        char line[512];
+        int len = snprintf(line, sizeof(line), "WHPX exits/%.1fs:",
+                           (now - last) / 1000.0);
+        for (k = 0; k < WXS_COUNT && len < (int)sizeof(line); k++) {
+            len += snprintf(line + len, sizeof(line) - len, " %s=%llu",
+                            whpx_exit_stat_names[k],
+                            (unsigned long long)
+                                atomic_xchg(&whpx_exit_stats[k], 0));
+        }
+        fprintf(stderr, "%s\n", line);
+    }
+}
+
 static int whpx_vcpu_run(CPUState *cpu)
 {
     HRESULT hr;
@@ -1164,6 +1239,7 @@ static int whpx_vcpu_run(CPUState *cpu)
         }
 
         whpx_vcpu_post_run(cpu);
+        whpx_exit_stats_account(&vcpu->exit_ctx);
 
         switch (vcpu->exit_ctx.ExitReason) {
         case WHvRunVpExitReasonMemoryAccess:
