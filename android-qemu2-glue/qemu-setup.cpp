@@ -643,19 +643,7 @@ bool qemu_android_emulation_setup() {
     // Note, the webrtc module could have started the shared memory module
     // with a differrent fps suggestion. (Fps is mainly used by clients as a
     // suggestion on how often to check for new frames)
-    //
-    // MAS: share the video by default (same code path as -share-vid and the
-    // console command `screenrecord webrtc start`). The region
-    // videmulator<console port> then exists from startup and is filled from
-    // the first frame the guest composes, so clients never see the all-zero
-    // (black) region a late `webrtc start` leaves on a static screen.
-    // ANDROID_EMU_SHARE_VID=0 restores the upstream opt-in behaviour.
-    const char* shareVidEnv = std::getenv("ANDROID_EMU_SHARE_VID");
-    const bool shareVidByDefault =
-            getConsoleAgents()->settings->android_qemu_mode() &&
-            !(shareVidEnv && !strcmp(shareVidEnv, "0"));
-    if (getConsoleAgents()->settings->android_cmdLineOptions()->share_vid ||
-        shareVidByDefault) {
+    if (getConsoleAgents()->settings->android_cmdLineOptions()->share_vid) {
         if (!getConsoleAgents()->record->startSharedMemoryModule(60)) {
             dwarning(
                     "Unable to setup a shared memory handler, last errno: "
