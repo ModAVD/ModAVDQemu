@@ -771,6 +771,20 @@ private:
                                      m_driveIndex++, bufferString.c_str());
                 deviceParam = StringFormat("%s,drive=userdata",
                                            kTarget.storageDeviceType);
+                // MAS: present /data as a write-through disk. The guest then
+                // sends no cache flushes (same guest-side effect as mounting
+                // /data with nobarrier: no flush round trips per fsync), while
+                // QEMU completes every write only after the data and the
+                // qcow2 metadata reached the host OS cache (FUA is emulated
+                // as a flush_to_os; cache=unsafe still skips the host fsync).
+                // Unlike guest nobarrier, killing the emulator process then
+                // loses nothing that the guest saw completed.
+                // ANDROID_EMU_USERDATA_WRITEBACK=1 restores the upstream
+                // write-back device.
+                if (System::get()->envGet("ANDROID_EMU_USERDATA_WRITEBACK") !=
+                    "1") {
+                    deviceParam += ",write-cache=off,config-wce=off";
+                }
                 break;
             case IMAGE_TYPE_SD_CARD:
                 if (m_hw->hw_sdCard_path != NULL &&
