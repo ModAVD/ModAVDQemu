@@ -38,8 +38,14 @@ typedef	uint32_t tcp_seq;
 #define      PR_SLOWHZ       2               /* 2 slow timeouts per second (approx) */
 #define      PR_FASTHZ       5               /* 5 fast timeouts per second (not important) */
 
-#define TCP_SNDSPACE 8192
-#define TCP_RCVSPACE 8192
+/*
+ * MAS: 8 KiB (rounded up to 6 * MSS = 8760 bytes) caps the bytes slirp can
+ * have in flight towards the guest (so_snd) and the window it offers the
+ * guest (so_rcv), so every connection runs stop-and-wait on the main loop.
+ * libslirp upstream uses 128 KiB (external/libslirp/src/tcp.h:44-45).
+ */
+#define TCP_SNDSPACE (1024 * 128)
+#define TCP_RCVSPACE (1024 * 128)
 
 /*
  * TCP header.
