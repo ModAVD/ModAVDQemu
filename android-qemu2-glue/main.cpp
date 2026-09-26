@@ -832,6 +832,16 @@ private:
             // larger images.
             System::FileSize diskSize;
             if (System::get()->pathFileSize(filePath, &diskSize)) {
+                // MAS: for userdata, filePath is the raw base image (tens of
+                // MB), not the overlay's virtual size, so a 64G /data got the
+                // 1 MB minimum (covers 8 GB with 64K clusters). Size the cache
+                // for the configured partition size instead.
+                if (type == IMAGE_TYPE_USER_DATA &&
+                    m_hw->disk_dataPartition_size > 0 &&
+                    (System::FileSize)m_hw->disk_dataPartition_size >
+                            diskSize) {
+                    diskSize = m_hw->disk_dataPartition_size;
+                }
                 // L2 cache size should be "disk_size_GB / 131072" as per QEMU
                 // docs with a default of 1MB. Round it up just in case.
                 const int l2CacheSize =
