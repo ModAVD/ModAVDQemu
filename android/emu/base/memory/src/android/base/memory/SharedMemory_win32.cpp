@@ -23,15 +23,20 @@ namespace base {
 SharedMemory::SharedMemory(const std::string& name, size_t size) : mSize(size) {
     const std::string kFileUri = "file://";
     if (name.find(kFileUri, 0) == 0) {
+        mShareType = ShareType::FILE_BACKED;
         // Convert URI to path using win32 api.
         const Win32UnicodeString srcUri(name);
-        WCHAR path[MAX_PATH];
+        WCHAR path[MAX_PATH] = {};
         DWORD cPath = MAX_PATH;
         auto HR = PathCreateFromUrlW(srcUri.c_str(), path, &cPath, NULL);
-        assert(HR == S_OK);
+        if (HR != S_OK) {
+            // |path| is not written on failure (e.g. E_POINTER when the
+            // decoded path does not fit in MAX_PATH). Leave |mName| empty so
+            // that openInternal() fails instead of using garbage as a path.
+            return;
+        }
         const Win32UnicodeString destPath(path);
         mName = PathUtils::recompose(PathUtils::decompose(destPath.toString()));
-        mShareType = ShareType::FILE_BACKED;
     } else {
         mShareType = ShareType::SHARED_MEMORY;
         mName = "SHM_" + name;
@@ -57,6 +62,9 @@ int SharedMemory::open(AccessMode access) {
 int SharedMemory::openInternal(AccessMode access, bool doMapping) {
     if (mCreate) {
         return EEXIST;
+    }
+    if (mShareType == ShareType::FILE_BACKED && mName.empty()) {
+        return -ERROR_INVALID_NAME;
     }
     LARGE_INTEGER memory;
     memory.QuadPart = (LONGLONG)mSize;
@@ -86,6 +94,8 @@ int SharedMemory::openInternal(AccessMode access, bool doMapping) {
                             FILE_FLAG_RANDOM_ACCESS, NULL);
         if (mFile == INVALID_HANDLE_VALUE) {
             int err = -GetLastError();
+            // close() treats any non-null |mFile| as an open handle.
+            mFile = invalidHandle();
             close();
             return err;
         }
