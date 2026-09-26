@@ -99,8 +99,14 @@ class WindowsEnvironment(BaseEnvironment):
                 str(
                     prgrfiles / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
                 ),
+                # Also accept the standalone Build Tools (VCTools workload):
+                # it ships the same MSVC toolchain and Windows SDK.
+                "-products",
+                "*",
                 "-requires",
                 "Microsoft.VisualStudio.Workload.NativeDesktop",
+                "Microsoft.VisualStudio.Workload.VCTools",
+                "-requiresAny",
                 "-sort",
                 "-format",
                 "json",
