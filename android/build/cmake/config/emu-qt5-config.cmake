@@ -33,6 +33,13 @@ endif()
 set(CMAKE_AUTOMOC TRUE)
 set(CMAKE_AUTOUIC TRUE)
 set(CMAKE_AUTORCC TRUE)
+if(WIN32)
+  # Let moc include headers relative to the include directories. Otherwise the
+  # generated moc files include them as "<autogen dir>/../../../../<source>",
+  # and on a normal checkout root the reported include path exceeds MAX_PATH:
+  # ninja's /showIncludes parser then fails the build with "path too long".
+  set(CMAKE_AUTOMOC_PATH_PREFIX ON)
+endif()
 if(LINUX)
   # rcc defaults to using zstd compression, but for an unknown reason, emulator is crashing with
   # this compression algorithm.
@@ -470,6 +477,7 @@ set(PACKAGE_EXPORT
     QT5_FOUND
     QT5_DEFINITIONS
     CMAKE_AUTOMOC
+    CMAKE_AUTOMOC_PATH_PREFIX
     CMAKE_AUTOUIC
     CMAKE_AUTORCC
     CMAKE_AUTORCC_OPTIONS
