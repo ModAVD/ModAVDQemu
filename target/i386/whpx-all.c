@@ -2577,10 +2577,13 @@ static void whpx_disable_xsave(struct whpx_state *whpx)
 
 /*
  * MAS: let the hypervisor emulate the local APICs, so that IPIs, EOIs and
- * the APIC timer no longer exit to QEMU. Opt-in until validated:
- *   ANDROID_EMU_WHPX_KERNEL_IRQCHIP=1  on, where the host supports it; kept
+ * the APIC timer no longer exit to QEMU. On by default where the host
+ * supports it:
+ *   (unset) or ANDROID_EMU_WHPX_KERNEL_IRQCHIP=1
+ *                                      on, where the host supports it; kept
  *                                      off on Windows 10 (upstream QEMU
  *                                      3b124791bdce does the same with a PIC)
+ *   ANDROID_EMU_WHPX_KERNEL_IRQCHIP=0  off
  *   ANDROID_EMU_WHPX_KERNEL_IRQCHIP=2  on, Windows 10 included
  *   -machine kernel-irqchip=on         required: fail if unavailable
  *   -machine kernel-irqchip=off        off, whatever the variable says
@@ -2590,7 +2593,7 @@ static int whpx_init_kernel_irqchip(MachineState *ms, struct whpx_state *whpx)
 {
     const char *env = getenv("ANDROID_EMU_WHPX_KERNEL_IRQCHIP");
     bool required = machine_kernel_irqchip_required(ms);
-    bool wanted = required || (env && (env[0] == '1' || env[0] == '2'));
+    bool wanted = required || !env || env[0] != '0';
     bool any_windows = required || (env && env[0] == '2');
     WHV_CAPABILITY_FEATURES features;
     WHV_PROCESSOR_PERFMON_FEATURES perfmon;
