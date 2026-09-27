@@ -2807,11 +2807,22 @@ extern "C" int main(int argc, char** argv) {
     }
 #endif
 
-    if (hw->hw_cpu_ncore > 6) {
+    // MAS: the old fixed limit of 6 vCPUs is raised to half the host's
+    // logical processors (one vCPU per physical core on SMT hosts), at most
+    // 16 and never below the old 6.
+    int maxCores = System::get()->getCpuCoreCount() / 2;
+    if (maxCores > 16) {
+        maxCores = 16;
+    }
+    if (maxCores < 6) {
+        maxCores = 6;
+    }
+    if (hw->hw_cpu_ncore > maxCores) {
         dwarning(
-                "Emulator does not support more than 6 cores. Number of cores "
-                "set to 6");
-        hw->hw_cpu_ncore = 6;
+                "Emulator does not support more than %d cores on this host. "
+                "Number of cores set to %d",
+                maxCores, maxCores);
+        hw->hw_cpu_ncore = maxCores;
     }
 #endif  // !TARGET_X86_64 && !TARGET_I386
 
