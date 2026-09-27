@@ -928,22 +928,33 @@ void slirp_pollfds_poll(GArray *pollfds, int select_error)
                      * Check for non-blocking, still-connecting sockets
                      */
                     if (so->so_state & SS_ISFCONNECTING) {
-                        /* Connected */
+                        int err = 0;
+                        socklen_t errlen = sizeof(err);
+
+                        /*
+                         * The connect has finished; SO_ERROR tells how. A
+                         * zero-byte send() cannot: on Windows it fails with
+                         * ENOTCONN after a refused or timed-out connect, which
+                         * was taken for "still connecting" after
+                         * SS_ISFCONNECTING had already been cleared, so the
+                         * guest never got a RST and waited for its own SYN
+                         * timeout.
+                         */
+                        if (getsockopt(so->s, SOL_SOCKET, SO_ERROR,
+                                       &err, &errlen) < 0) {
+                            err = errno;
+                        }
+                        if (err == EINPROGRESS || err == EWOULDBLOCK ||
+                            err == EAGAIN) {
+                            continue;
+                        }
+
                         so->so_state &= ~SS_ISFCONNECTING;
-
-                        ret = send(so->s, (const void *) &ret, 0, 0);
-                        if (ret < 0) {
-                            /* XXXXX Must fix, zero bytes is a NOP */
-                            if (errno == EAGAIN || errno == EWOULDBLOCK ||
-                                errno == EINPROGRESS || errno == ENOTCONN) {
-                                continue;
-                            }
-
-                            /* else failed */
+                        if (err) {
+                            /* Failed: tcp_input() resets the guest's connection */
                             so->so_state &= SS_PERSISTENT_MASK;
                             so->so_state |= SS_NOFDREF;
                         }
-                        /* else so->so_state &= ~SS_ISFCONNECTING; */
 
                         /*
                          * Continue tcp_input
