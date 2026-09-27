@@ -343,6 +343,95 @@ static int whpx_set_tsc(CPUState *cpu)
     return 0;
 }
 
+/*
+ * MAS: the event the hypervisor is about to deliver
+ * (WHvRegisterPendingInterruption) is vCPU state like any register. When
+ * whpx_vcpu_pre_run() queues an interrupt, the local APIC has already moved
+ * the vector from IRR to ISR, so a snapshot taken before the guest took it
+ * keeps that vector in service forever: the vCPU never sees its timer or any
+ * other interrupt of equal or lower priority again after loadvm. Keep the
+ * event in env->interrupt_injected / env->nmi_injected (part of the "cpu"
+ * section) and put it back when the full state is loaded; clear it on reset
+ * and on loadvm otherwise, so that an event of the VM that ran before is not
+ * delivered into the loaded one.
+ */
+static void whpx_get_pending_interruption(CPUState *cpu)
+{
+    struct CPUX86State *env = (CPUArchState *)(cpu->env_ptr);
+    struct whpx_state *whpx = &whpx_global;
+    WHV_REGISTER_NAME reg_name = WHvRegisterPendingInterruption;
+    WHV_REGISTER_VALUE reg_value;
+    HRESULT hr;
+
+    env->interrupt_injected = -1;
+    env->nmi_injected = 0;
+
+    hr = whp_dispatch.WHvGetVirtualProcessorRegisters(
+        whpx->partition, cpu->cpu_index, &reg_name, 1, &reg_value);
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to get pending interruption, hr=%08lx", hr);
+        return;
+    }
+
+    if (!reg_value.PendingInterruption.InterruptionPending) {
+        return;
+    }
+
+    switch (reg_value.PendingInterruption.InterruptionType) {
+    case WHvX64PendingInterrupt:
+        env->interrupt_injected =
+            reg_value.PendingInterruption.InterruptionVector;
+        break;
+    case WHvX64PendingNmi:
+        env->nmi_injected = 1;
+        break;
+    default:
+        /* Pending exceptions are not carried over (not seen in practice). */
+        break;
+    }
+}
+
+static void whpx_set_pending_interruption(CPUState *cpu, bool from_env)
+{
+    struct CPUX86State *env = (CPUArchState *)(cpu->env_ptr);
+    struct whpx_state *whpx = &whpx_global;
+    struct whpx_vcpu *vcpu = get_whpx_vcpu(cpu);
+    WHV_REGISTER_NAME reg_name = WHvRegisterPendingInterruption;
+    WHV_REGISTER_VALUE reg_value;
+    HRESULT hr;
+
+    memset(&reg_value, 0, sizeof(reg_value));
+
+    /*
+     * Vectors below 32 are exceptions, never external interrupts. Snapshots
+     * written before this change carry 0 (or -1) here, i.e. nothing pending.
+     */
+    if (from_env && env->nmi_injected) {
+        reg_value.PendingInterruption.InterruptionPending = 1;
+        reg_value.PendingInterruption.InterruptionType = WHvX64PendingNmi;
+        reg_value.PendingInterruption.InterruptionVector = 2;
+    } else if (from_env && env->interrupt_injected >= 32 &&
+               env->interrupt_injected <= 255) {
+        reg_value.PendingInterruption.InterruptionPending = 1;
+        reg_value.PendingInterruption.InterruptionType = WHvX64PendingInterrupt;
+        reg_value.PendingInterruption.InterruptionVector =
+            env->interrupt_injected;
+    } else {
+        env->interrupt_injected = -1;
+        env->nmi_injected = 0;
+    }
+
+    hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
+        whpx->partition, cpu->cpu_index, &reg_name, 1, &reg_value);
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to set pending interruption, hr=%08lx", hr);
+        return;
+    }
+
+    vcpu->interruption_pending =
+        reg_value.PendingInterruption.InterruptionPending;
+}
+
 static void whpx_set_registers(CPUState *cpu, int level)
 {
     struct whpx_state *whpx = &whpx_global;
@@ -512,6 +601,10 @@ static void whpx_set_registers(CPUState *cpu, int level)
     if (FAILED(hr)) {
         error_report("WHPX: Failed to set virtual processor context, hr=%08lx",
                      hr);
+    }
+
+    if (level >= WHPX_SET_RESET_STATE) {
+        whpx_set_pending_interruption(cpu, level >= WHPX_SET_FULL_STATE);
     }
 
     return;
@@ -712,6 +805,8 @@ static void whpx_get_registers(CPUState *cpu)
     /* Interrupt / Event Registers - Skipped */
 
     assert(idx == RTL_NUMBER_OF(whpx_register_names));
+
+    whpx_get_pending_interruption(cpu);
 
     return;
 }
