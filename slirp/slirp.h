@@ -213,6 +213,8 @@ struct Slirp {
     /* icmp states */
     struct socket icmp;
     struct socket *icmp_last_so;
+    /* echo requests sent as UDP (on udb) for lack of an ICMP socket */
+    unsigned int icmp_udp_echo_count;
 
     /* tftp states */
     char *tftp_prefix;

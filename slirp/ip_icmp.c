@@ -38,6 +38,9 @@
 /* Be nice and tell them it's just a pseudo-ping packet */
 static const char icmp_ping_msg[] = "This is a pseudo-PING packet used by Slirp to emulate ICMP ECHO-REQUEST packets.\n";
 
+/* Echo requests that may be waiting for a reply as UDP at once */
+#define ICMP_UDP_ECHO_MAX 64
+
 /* list of actions for icmp_send_error() on RX of an icmp message */
 static const int icmp_flush[19] = {
 /*  ECHO REPLY (0)  */   0,
@@ -134,6 +137,22 @@ void icmp_detach(struct socket *so)
 }
 
 /*
+ * Close the oldest echo request that icmp_input() sent as UDP. udb has the
+ * newest sockets first, so search it from the tail.
+ */
+static void icmp_udp_echo_drop_oldest(Slirp *slirp)
+{
+    struct socket *so;
+
+    for (so = slirp->udb.so_prev; so != &slirp->udb; so = so->so_prev) {
+        if (so->so_type == IPPROTO_ICMP) {
+            udp_detach(so);
+            return;
+        }
+    }
+}
+
+/*
  * Process a received ICMP message.
  */
 void
@@ -183,6 +202,18 @@ icmp_input(struct mbuf *m, int hlen)
       if (icmp_send(so, m, hlen) == 0) {
         return;
       }
+      /*
+       * No ICMP socket (always the case on Windows): the echo goes out as a
+       * UDP datagram to port 7 instead, one host socket per request. A guest
+       * that probes many hosts (traceroute-style, hundreds of echoes a
+       * second) would otherwise pile up thousands of host sockets and
+       * ephemeral ports. A reply closes the socket at once, so only
+       * unanswered requests count against the limit; past it, the oldest
+       * one is given up as lost to make room for this one.
+       */
+      if (slirp->icmp_udp_echo_count >= ICMP_UDP_ECHO_MAX) {
+        icmp_udp_echo_drop_oldest(slirp);
+      }
       if (udp_attach(so, AF_INET) == -1) {
 	DEBUG_MISC((dfd,"icmp_input udp_attach errno = %d-%s\n",
 		    errno,strerror(errno)));
@@ -190,6 +221,9 @@ icmp_input(struct mbuf *m, int hlen)
 	m_free(m);
 	goto end_error;
       }
+      /* A reply that has not come back in 10 s is not coming back. */
+      so->so_expire = curtime + SO_EXPIREFAST;
+      slirp->icmp_udp_echo_count++;
       so->so_m = m;
       so->so_ffamily = AF_INET;
       so->so_faddr = ip->ip_dst;

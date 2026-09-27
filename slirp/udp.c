@@ -332,6 +332,10 @@ udp_reattach(struct socket *so, unsigned short af)
 void
 udp_detach(struct socket *so)
 {
+	if (so->so_type == IPPROTO_ICMP) {
+		/* an echo request that icmp_input() sent as UDP */
+		so->slirp->icmp_udp_echo_count--;
+	}
 	closesocket(so->s);
 	sofree(so);
 }
