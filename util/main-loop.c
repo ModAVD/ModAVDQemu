@@ -444,9 +444,20 @@ static int os_host_main_loop_wait(int64_t timeout)
         return ret;
     }
 
-    WSAPOLLFD fds[128];
+    /*
+     * One WSAPOLLFD per slirp socket. A fixed-size array silently skipped
+     * every socket past its end, and since slirp puts new sockets at the head
+     * of its lists, older connections were the ones that stopped being polled.
+     * WSAPoll() itself has no FD_SETSIZE-style limit.
+     */
+    static WSAPOLLFD *fds;
+    static guint fds_size;
     int polled_count = 0;
-    nfds = pollfds_fill(gpollfds, fds, ARRAY_SIZE(fds), &polled_count);
+    if (fds_size < gpollfds->len) {
+        fds_size = MAX(gpollfds->len, fds_size * 2);
+        fds = g_renew(WSAPOLLFD, fds, fds_size);
+    }
+    nfds = pollfds_fill(gpollfds, fds, gpollfds->len, &polled_count);
     if (polled_count > 0) {
         qemu_mutex_unlock_iothread();
         poll_ret = WSAPoll(fds, nfds, 0);
