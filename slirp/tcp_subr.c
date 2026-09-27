@@ -427,6 +427,62 @@ static int socket_fallback(struct sockaddr_storage * addr, unsigned short type) 
 }
 
 /*
+ * Turn on TCP keepalive, with short timers, on the host socket of a guest
+ * connection.
+ *
+ * Every guest connection is proxied through a host socket, and that host
+ * socket is what talks to the peer. When the peer (or something on the path)
+ * silently stops answering, the host socket stays ESTABLISHED with nothing to
+ * send and nothing arriving, and nothing ever tells slirp: the guest keeps an
+ * open connection that will never deliver another byte. Applications then
+ * give up on their own timeout and retry while the old request is still
+ * pending. Seen with a CDN that black-holes about 0.5% of its connections
+ * after the first 64-300 KB: our FIN is never ACKed either.
+ *
+ * With keepalive the host stack probes such a connection once it has been
+ * idle for `idle` seconds and fails it after `cnt` unanswered probes sent
+ * `intvl` seconds apart. soread() then sees the error and the guest gets a
+ * RST. A peer that is alive answers the probes however long it stays quiet,
+ * so slow or idle connections are not affected.
+ *
+ * ANDROID_EMU_SLIRP_TCP_KEEPALIVE=<idle>,<intvl>,<cnt> overrides the timers;
+ * "0" turns keepalive off.
+ */
+static void tcp_set_keepalive(int s)
+{
+    static int idle = -1, intvl, cnt;
+    int opt = 1;
+
+    if (idle < 0) {
+        const char *env = getenv("ANDROID_EMU_SLIRP_TCP_KEEPALIVE");
+        int a, b, c, n;
+
+        idle = 3;
+        intvl = 1;
+        cnt = 5;
+        if (env) {
+            n = sscanf(env, "%d,%d,%d", &a, &b, &c);
+            if (n >= 1 && a <= 0) {
+                idle = 0;
+            } else if (n == 3 && a > 0 && b > 0 && c > 0) {
+                idle = a;
+                intvl = b;
+                cnt = c;
+            }
+        }
+    }
+    if (!idle) {
+        return;
+    }
+    qemu_setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt));
+#if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
+    qemu_setsockopt(s, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    qemu_setsockopt(s, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+    qemu_setsockopt(s, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+#endif
+}
+
+/*
  * Connect to a host on the Internet
  * Called by tcp_input
  * Only do a connect, the tcp fields will be set in tcp_input
@@ -466,6 +522,7 @@ int tcp_fconnect(struct socket *so, unsigned short af)
     qemu_setsockopt(s, SOL_SOCKET, SO_OOBINLINE, &opt, sizeof(opt));
 	opt = 1;
 	qemu_setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+	tcp_set_keepalive(s);
 
 	/* We don't care what port we get */
     ret = connect(s, (struct sockaddr *)&addr, sockaddr_size(&addr));

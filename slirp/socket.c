@@ -227,8 +227,16 @@ soread(struct socket *so)
 			DEBUG_MISC((dfd, " --- soread() disconnected, nn = %d, errno = %d-%s\n", nn, errno,strerror(errno)));
 			sofcantrcvmore(so);
 
+			/*
+			 * A connection the host stack gave up on (keepalive or
+			 * retransmission timeout) is dead, not closed: reset the
+			 * guest's side instead of sending a FIN, which would make a
+			 * truncated response look complete.
+			 */
 			if (err == ECONNRESET || err == ECONNREFUSED
-			    || err == ENOTCONN || err == EPIPE) {
+			    || err == ENOTCONN || err == EPIPE
+			    || err == ETIMEDOUT || err == ENETRESET
+			    || err == ECONNABORTED) {
 				tcp_drop(sototcpcb(so), err);
 			} else {
 				tcp_sockclosed(sototcpcb(so));
