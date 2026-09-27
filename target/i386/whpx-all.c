@@ -309,6 +309,12 @@ enum {
     WHPX_SET_FULL_STATE,
 };
 
+/* TSC and virtual clock across a VM stop, see whpx_vm_state_change() */
+static int64_t whpx_vclock_offset;  /* cpu_get_clock() - get_clock() */
+static bool whpx_vclock_offset_valid;
+static int64_t whpx_vclock_stopped; /* cpu_get_clock() while stopped */
+static int64_t whpx_tsc_lead;       /* ns the TSC ran on alone at stop */
+
 static int whpx_get_tsc(CPUState *cpu)
 {
     struct CPUX86State *env = (CPUArchState *)(cpu->env_ptr);
@@ -352,6 +358,9 @@ static int whpx_set_tsc(CPUState *cpu)
             warn_report("WHPX: Failed to suspend partition, hr=%08lx", hr);
         }
     }
+
+    /* The TSC and the virtual clock now come from reset or loadvm. */
+    whpx_tsc_lead = 0;
 
     tsc_val.Reg64 = env->tsc;
     hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
@@ -2018,11 +2027,6 @@ static void whpx_cpu_update_state(void *opaque, int running, RunState state)
  * so keep it suspended on resume until the virtual clock has run as long
  * as the TSC ran alone on stop.
  */
-static int64_t whpx_vclock_offset;  /* cpu_get_clock() - get_clock() */
-static bool whpx_vclock_offset_valid;
-static int64_t whpx_vclock_stopped; /* cpu_get_clock() while stopped */
-static int64_t whpx_tsc_lead;       /* ns the TSC ran on alone at stop */
-
 static void whpx_vm_state_change(void *opaque, int running, RunState state)
 {
     struct whpx_state *whpx = &whpx_global;
