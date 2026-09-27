@@ -508,28 +508,38 @@ static void whpx_apic_get(CPUState *cs)
 static void whpx_get_lapic_cpu_state(CPUState *cpu)
 {
     struct CPUX86State *env = (CPUArchState *)(cpu->env_ptr);
-    WHV_REGISTER_NAME reg_names[2] = {
-        WHvRegisterInternalActivityState, WHvX64RegisterTscDeadline,
-    };
-    WHV_REGISTER_VALUE reg_values[2];
+    WHV_REGISTER_NAME reg_name = WHvRegisterInternalActivityState;
+    WHV_REGISTER_VALUE reg_value;
     HRESULT hr;
 
-    memset(reg_values, 0, sizeof(reg_values));
+    memset(&reg_value, 0, sizeof(reg_value));
     hr = whp_dispatch.WHvGetVirtualProcessorRegisters(
-        whpx_global.partition, cpu->cpu_index, reg_names, 2, reg_values);
+        whpx_global.partition, cpu->cpu_index, &reg_name, 1, &reg_value);
     if (FAILED(hr)) {
         error_report("WHPX: Failed to get APIC activity state, hr=%08lx", hr);
         return;
     }
 
-    if (reg_values[0].InternalActivity.StartupSuspend) {
+    if (reg_value.InternalActivity.StartupSuspend) {
         env->mp_state = WHPX_MP_STATE_UNINITIALIZED;
-    } else if (reg_values[0].InternalActivity.HaltSuspend) {
+    } else if (reg_value.InternalActivity.HaltSuspend) {
         env->mp_state = WHPX_MP_STATE_HALTED;
     } else {
         env->mp_state = WHPX_MP_STATE_RUNNABLE;
     }
-    env->tsc_deadline = reg_values[1].Reg64;
+
+    /*
+     * Read on its own: the hypervisor refuses the TSC deadline register
+     * (HV_STATUS_INVALID_PARAMETER) when the guest CPUID has no TSC-deadline
+     * timer, as with the Android x86_64 CPU model. Reading it together with
+     * the activity state made the whole call fail, so mp_state kept its
+     * reset value and snapshots saved every AP as "waiting for SIPI".
+     */
+    reg_name = WHvX64RegisterTscDeadline;
+    memset(&reg_value, 0, sizeof(reg_value));
+    hr = whp_dispatch.WHvGetVirtualProcessorRegisters(
+        whpx_global.partition, cpu->cpu_index, &reg_name, 1, &reg_value);
+    env->tsc_deadline = SUCCEEDED(hr) ? reg_value.Reg64 : 0;
 }
 
 static void whpx_set_lapic_cpu_state(CPUState *cpu, int level)
