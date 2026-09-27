@@ -2052,6 +2052,8 @@ static void whpx_vm_state_change(void *opaque, int running, RunState state)
          * WHvResumePartitionTime the first WHvRunVirtualProcessor call
          * resumes it.
          */
+        int64_t dbg_lead = whpx_tsc_lead;
+        int64_t dbg_entry = cpu_get_clock() - whpx_vclock_stopped;
         while (whpx_tsc_lead > 0) {
             left = whpx_vclock_stopped + whpx_tsc_lead - cpu_get_clock();
             if (left <= 0) {
@@ -2066,6 +2068,13 @@ static void whpx_vm_state_change(void *opaque, int running, RunState state)
         if (FAILED(hr)) {
             warn_report("WHPX: Failed to resume partition time,"
                         " hr=%08lx", hr);
+        }
+        /* MAS local diagnostics, not for upstream */
+        if (getenv("WHPX_TSC_DEBUG") && whpx_vclock_offset_valid) {
+            fprintf(stderr, "whpx-tsc: resume lead_ns=%lld gap_entry_ns=%lld"
+                    " gap_resume_ns=%lld\n", (long long)dbg_lead,
+                    (long long)dbg_entry,
+                    (long long)(cpu_get_clock() - whpx_vclock_stopped));
         }
         whpx_vclock_offset = cpu_get_clock() - get_clock();
         whpx_vclock_offset_valid = true;
