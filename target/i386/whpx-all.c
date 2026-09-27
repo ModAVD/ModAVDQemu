@@ -1414,6 +1414,45 @@ static void whpx_cpu_update_state(void *opaque, int running, RunState state)
     }
 }
 
+/*
+ * The partition's time (the guest TSC) keeps running while the VM is
+ * stopped, but QEMU_CLOCK_VIRTUAL, which drives the HPET, the PIT and the
+ * emulated local APIC timer, does not. A guest on the TSC clocksource then
+ * sees the TSC jump ahead of every other clock by the length of the stop
+ * (pause, savevm) and its clocksource watchdog drops the TSC. savevm also
+ * reads the TSC only after the RAM has been written, so a snapshot carries
+ * a TSC that is ahead of its own virtual clock and loadvm repeats the jump.
+ * Stop the partition's time together with the virtual clock; the TSC read
+ * for savevm is then the value at the moment the VM stopped.
+ */
+static void whpx_vm_state_change(void *opaque, int running, RunState state)
+{
+    struct whpx_state *whpx = &whpx_global;
+    HRESULT hr;
+
+    if (!running) {
+        if (whp_dispatch.WHvSuspendPartitionTime) {
+            hr = whp_dispatch.WHvSuspendPartitionTime(whpx->partition);
+            if (FAILED(hr)) {
+                warn_report("WHPX: Failed to suspend partition time,"
+                            " hr=%08lx", hr);
+            }
+        }
+    } else if (whp_dispatch.WHvResumePartitionTime) {
+        /*
+         * Time is suspended here: by the handler above, or by
+         * whpx_set_tsc() on the initial reset and on loadvm. Without
+         * WHvResumePartitionTime the first WHvRunVirtualProcessor call
+         * resumes it.
+         */
+        hr = whp_dispatch.WHvResumePartitionTime(whpx->partition);
+        if (FAILED(hr)) {
+            warn_report("WHPX: Failed to resume partition time,"
+                        " hr=%08lx", hr);
+        }
+    }
+}
+
 static void do_whpx_cpu_synchronize_state(CPUState *cpu, run_on_cpu_data arg)
 {
     whpx_get_registers(cpu);
@@ -2073,6 +2112,8 @@ static int whpx_accel_init(MachineState *ms)
     }
 
     whpx_memory_init();
+
+    qemu_add_vm_change_state_handler(whpx_vm_state_change, NULL);
 
     cpu_interrupt_handler = whpx_handle_interrupt;
 
