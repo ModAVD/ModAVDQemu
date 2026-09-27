@@ -14,9 +14,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <istream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -201,6 +203,16 @@ using Ui::Settings::SaveSnapshotOnExit;
 namespace proto = android_studio;
 namespace fc = android::featurecontrol;
 namespace xr_service = android::xr::xr_service;
+
+// Instances here run unattended for automation, so the side toolbar keeps only
+// power, volume and the three navigation keys. ANDROID_EMU_FULL_TOOLBAR=1 shows
+// the full toolbar again.
+static bool leanToolbar() {
+    static const bool lean =
+            System::get()->getEnvironmentVariable("ANDROID_EMU_FULL_TOOLBAR") !=
+            "1";
+    return lean;
+}
 
 template <typename T>
 ToolWindow::WindowHolder<T>::WindowHolder(ToolWindow* tw,
@@ -640,6 +652,26 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
                  ->hands_in_space) {
         mToolsUi->left_hand_button->setHidden(true);
         mToolsUi->right_hand_button->setHidden(true);
+    }
+
+    if (leanToolbar()) {
+        // Hide everything else; the kept buttons stay as the AVD flavour
+        // left them (all_apps_button stands in for home with
+        // AllAppsForHomeTray). The layout is SetFixedSize, so the toolbar
+        // shrinks to the remaining buttons.
+        const QPushButton* keep[] = {
+                mToolsUi->close_button,       mToolsUi->minimize_button,
+                mToolsUi->power_button,       mToolsUi->volume_up_button,
+                mToolsUi->volume_down_button, mToolsUi->back_button,
+                mToolsUi->home_button,        mToolsUi->all_apps_button,
+                mToolsUi->overview_button,
+        };
+        for (QPushButton* button : findChildren<QPushButton*>()) {
+            if (std::find(std::begin(keep), std::end(keep), button) ==
+                std::end(keep)) {
+                button->setHidden(true);
+            }
+        }
     }
 
     sToolWindow = this;
@@ -2448,6 +2480,9 @@ void ToolWindow::hideRotationButton(bool hide) {
         avdInfo_getAvdFlavor(getConsoleAgents()->settings->avdInfo()) ==
                 AVD_DESKTOP) {
         // already hide, do not bother its settings
+        return;
+    } else if (leanToolbar()) {
+        // rotation buttons stay hidden in the lean toolbar
         return;
     } else {
         mToolsUi->prev_layout_button->setHidden(hide);
