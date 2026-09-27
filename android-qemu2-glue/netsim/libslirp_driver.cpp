@@ -112,7 +112,10 @@ static void pollfds_poll(GArray* pollfds, const WSAPOLLFD* fds) {
             if (fds[i].revents & POLLWRNORM) {
                 revents |= G_IO_OUT;
             }
-            if (fds[i].revents & (POLLERR | POLLHUP | POLLPRI | POLLRDBAND)) {
+            // Only real out-of-band data is G_IO_PRI: libslirp answers it with
+            // sorecvoob(), which marks the data as urgent for the guest.
+            // POLLERR / POLLHUP are already reported as G_IO_IN above.
+            if (fds[i].revents & (POLLPRI | POLLRDBAND)) {
                 revents |= G_IO_PRI;
             }
         }
