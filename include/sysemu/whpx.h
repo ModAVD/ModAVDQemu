@@ -32,9 +32,18 @@ void* whpx_gpa2hva(uint64_t gpa, bool* found);
 
 int whpx_enabled(void);
 
+/*
+ * True when the local APICs are emulated by the hypervisor
+ * (WHvX64LocalApicEmulationModeXApic, "kernel-irqchip"). The PIC and the
+ * IOAPIC stay in QEMU either way.
+ */
+extern bool whpx_kernel_irqchip;
+#define whpx_apic_in_platform() (whpx_kernel_irqchip)
+
 #else /* CONFIG_WHPX */
 
 #define whpx_enabled() (0)
+#define whpx_apic_in_platform() (0)
 
 #endif /* CONFIG_WHPX */
 

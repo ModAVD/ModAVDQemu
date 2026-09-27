@@ -47,6 +47,9 @@ typedef int WINBOOL;
 #define LIST_WINHVPLATFORM_FUNCTIONS_SUPPLEMENTAL(X) \
   X(HRESULT, WHvSuspendPartitionTime, (WHV_PARTITION_HANDLE Partition)) \
   X(HRESULT, WHvResumePartitionTime, (WHV_PARTITION_HANDLE Partition)) \
+  X(HRESULT, WHvRequestInterrupt, (WHV_PARTITION_HANDLE Partition, const WHV_INTERRUPT_CONTROL* Interrupt, UINT32 InterruptControlSize)) \
+  X(HRESULT, WHvGetVirtualProcessorInterruptControllerState2, (WHV_PARTITION_HANDLE Partition, UINT32 VpIndex, VOID* State, UINT32 StateSize, UINT32* WrittenSize)) \
+  X(HRESULT, WHvSetVirtualProcessorInterruptControllerState2, (WHV_PARTITION_HANDLE Partition, UINT32 VpIndex, const VOID* State, UINT32 StateSize)) \
 
 
 #define LIST_WINHVEMULATION_FUNCTIONS(X) \

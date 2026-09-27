@@ -3991,6 +3991,8 @@ APICCommonClass *apic_get_class(void)
         apic_type = "kvm-apic";
     } else if (aehd_apic_in_kernel()) {
         apic_type = "aehd-apic";
+    } else if (whpx_apic_in_platform()) {
+        apic_type = "whpx-apic";
     } else if (xen_enabled()) {
         apic_type = "xen-apic";
     }

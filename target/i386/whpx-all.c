@@ -27,6 +27,10 @@
 #include "qemu/abort.h"
 #include "qemu/main-loop.h"
 #include "hw/boards.h"
+#include "hw/i386/apic_internal.h"
+#include "hw/i386/apic-msidef.h"
+#include "hw/i386/ioapic.h"
+#include "hw/pci/msi.h"
 #include "qemu/error-report.h"
 #include "qemu/queue.h"
 #include "qapi/error.h"
@@ -87,7 +91,7 @@ static const WHV_REGISTER_NAME whpx_register_names[] = {
     WHvX64RegisterCr2,
     WHvX64RegisterCr3,
     WHvX64RegisterCr4,
-    WHvX64RegisterCr8,
+    /* WHvX64RegisterCr8 is at the end, see whpx_register_count() */
 
     /* X64 Debug Registers */
     /*
@@ -159,6 +163,12 @@ static const WHV_REGISTER_NAME whpx_register_names[] = {
      * WHvRegisterPendingEvent1
      * WHvX64RegisterDeliverabilityNotifications,
      */
+
+    /*
+     * Must stay last: when the hypervisor emulates the local APIC, the TPR
+     * is part of the APIC state and CR8 is left out of the bulk transfers.
+     */
+    WHvX64RegisterCr8,
 };
 
 struct whpx_register_set {
@@ -169,6 +179,7 @@ struct whpx_vcpu {
     WHV_EMULATOR_HANDLE emulator;
     bool window_registered;
     bool interruptable;
+    bool ready_for_pic_interrupt;
     uint64_t tpr;
     uint64_t apic_base;
     bool interruption_pending;
@@ -184,6 +195,16 @@ static WHV_PROCESSOR_XSAVE_FEATURES whpx_xsave_cap;
 
 struct whpx_state whpx_global;
 struct WHPDispatch whp_dispatch;
+
+/* The hypervisor emulates the local APICs (see whpx_init_kernel_irqchip). */
+bool whpx_kernel_irqchip;
+
+static UINT32 whpx_register_count(void)
+{
+    /* WHvX64RegisterCr8 is the last entry of whpx_register_names. */
+    return RTL_NUMBER_OF(whpx_register_names) -
+           (whpx_apic_in_platform() ? 1 : 0);
+}
 
 static bool whpx_has_xsave(void)
 {
@@ -344,6 +365,402 @@ static int whpx_set_tsc(CPUState *cpu)
 }
 
 /*
+ * MAS: local APIC emulated by the hypervisor ("whpx-apic"), ported from
+ * upstream QEMU target/i386/whpx/whpx-apic.c (faf20793b5af, QEMU 6.0) with
+ * the later upstream fixes that apply to the xAPIC mode used here:
+ * TPR is APIC state, not CR8 (4fdbad6c4981); MSIs with vector 0 are dropped
+ * (9533cc6d3604); the vCPU is taken out of HLT after a PIC interrupt is
+ * queued through WHvRegisterPendingEvent (ca7a6add3bd2, 3588d68bc8da);
+ * INIT/SIPI are left to the hypervisor (6ef6a0f04e5e).
+ *
+ * The PIC and the IOAPIC stay in QEMU. IOAPIC and PCI MSI writes reach the
+ * APIC MMIO window of QEMU and are turned into WHvRequestInterrupt();
+ * EOIs of level-triggered vectors come back as WHvRunVpExitReasonX64ApicEoi.
+ * The guest's own LAPIC accesses (IPIs, EOI, timer) no longer leave the
+ * hypervisor.
+ */
+struct whpx_lapic_state {
+    struct {
+        uint32_t data;
+        uint32_t padding[3];
+    } fields[256];
+};
+
+/* env->mp_state values, same meaning as KVM_MP_STATE_* */
+#define WHPX_MP_STATE_RUNNABLE          0
+#define WHPX_MP_STATE_UNINITIALIZED     1
+#define WHPX_MP_STATE_INIT_RECEIVED     2
+#define WHPX_MP_STATE_HALTED            3
+
+static void whpx_put_apic_state(APICCommonState *s,
+                                struct whpx_lapic_state *kapic)
+{
+    int i;
+
+    memset(kapic, 0, sizeof(*kapic));
+    kapic->fields[0x2].data = s->id << 24;
+    kapic->fields[0x3].data = s->version | ((APIC_LVT_NB - 1) << 16);
+    kapic->fields[0x8].data = s->tpr;
+    kapic->fields[0xd].data = s->log_dest << 24;
+    kapic->fields[0xe].data = (uint32_t)s->dest_mode << 28 | 0x0fffffff;
+    kapic->fields[0xf].data = s->spurious_vec;
+    for (i = 0; i < 8; i++) {
+        kapic->fields[0x10 + i].data = s->isr[i];
+        kapic->fields[0x18 + i].data = s->tmr[i];
+        kapic->fields[0x20 + i].data = s->irr[i];
+    }
+
+    kapic->fields[0x28].data = s->esr;
+    kapic->fields[0x30].data = s->icr[0];
+    kapic->fields[0x31].data = s->icr[1];
+    for (i = 0; i < APIC_LVT_NB; i++) {
+        kapic->fields[0x32 + i].data = s->lvt[i];
+    }
+
+    kapic->fields[0x38].data = s->initial_count;
+    kapic->fields[0x3e].data = s->divide_conf;
+}
+
+static void whpx_get_apic_state(APICCommonState *s,
+                                struct whpx_lapic_state *kapic)
+{
+    int i, v;
+
+    s->id = kapic->fields[0x2].data >> 24;
+    s->tpr = kapic->fields[0x8].data;
+    s->arb_id = kapic->fields[0x9].data;
+    s->log_dest = kapic->fields[0xd].data >> 24;
+    s->dest_mode = kapic->fields[0xe].data >> 28;
+    s->spurious_vec = kapic->fields[0xf].data;
+    for (i = 0; i < 8; i++) {
+        s->isr[i] = kapic->fields[0x10 + i].data;
+        s->tmr[i] = kapic->fields[0x18 + i].data;
+        s->irr[i] = kapic->fields[0x20 + i].data;
+    }
+
+    s->esr = kapic->fields[0x28].data;
+    s->icr[0] = kapic->fields[0x30].data;
+    s->icr[1] = kapic->fields[0x31].data;
+    for (i = 0; i < APIC_LVT_NB; i++) {
+        s->lvt[i] = kapic->fields[0x32 + i].data;
+    }
+
+    s->initial_count = kapic->fields[0x38].data;
+    s->divide_conf = kapic->fields[0x3e].data;
+
+    v = (s->divide_conf & 3) | ((s->divide_conf >> 1) & 4);
+    s->count_shift = (v + 1) & 7;
+
+    /*
+     * The current count is not carried: after a loadvm the timer restarts
+     * from the initial count (as with KVM's and AEHD's in-kernel APIC).
+     */
+    s->initial_count_load_time = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    apic_next_timer(s, s->initial_count_load_time);
+}
+
+static void whpx_apic_put(CPUState *cs, run_on_cpu_data data)
+{
+    APICCommonState *s = data.host_ptr;
+    struct whpx_lapic_state kapic;
+    WHV_REGISTER_NAME reg_name = WHvX64RegisterApicBase;
+    WHV_REGISTER_VALUE reg_value;
+    HRESULT hr;
+
+    memset(&reg_value, 0, sizeof(reg_value));
+    reg_value.Reg64 = s->apicbase;
+    hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
+        whpx_global.partition, cs->cpu_index, &reg_name, 1, &reg_value);
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to set APIC base, hr=%08lx", hr);
+    }
+
+    whpx_put_apic_state(s, &kapic);
+    hr = whp_dispatch.WHvSetVirtualProcessorInterruptControllerState2(
+        whpx_global.partition, cs->cpu_index, &kapic, sizeof(kapic));
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to set local APIC state, hr=%08lx", hr);
+        abort();
+    }
+}
+
+static void whpx_apic_get(CPUState *cs)
+{
+    APICCommonState *s = APIC_COMMON(X86_CPU(cs)->apic_state);
+    struct whpx_lapic_state kapic;
+    HRESULT hr;
+
+    hr = whp_dispatch.WHvGetVirtualProcessorInterruptControllerState2(
+        whpx_global.partition, cs->cpu_index, &kapic, sizeof(kapic), NULL);
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to get local APIC state, hr=%08lx", hr);
+        abort();
+    }
+
+    whpx_get_apic_state(s, &kapic);
+}
+
+/*
+ * Activity state (wait-for-SIPI / HLT inside the hypervisor) and the TSC
+ * deadline live in the hypervisor with its APIC. Keep them in env->mp_state
+ * and env->tsc_deadline, which the "cpu" section already carries.
+ */
+static void whpx_get_lapic_cpu_state(CPUState *cpu)
+{
+    struct CPUX86State *env = (CPUArchState *)(cpu->env_ptr);
+    WHV_REGISTER_NAME reg_names[2] = {
+        WHvRegisterInternalActivityState, WHvX64RegisterTscDeadline,
+    };
+    WHV_REGISTER_VALUE reg_values[2];
+    HRESULT hr;
+
+    memset(reg_values, 0, sizeof(reg_values));
+    hr = whp_dispatch.WHvGetVirtualProcessorRegisters(
+        whpx_global.partition, cpu->cpu_index, reg_names, 2, reg_values);
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to get APIC activity state, hr=%08lx", hr);
+        return;
+    }
+
+    if (reg_values[0].InternalActivity.StartupSuspend) {
+        env->mp_state = WHPX_MP_STATE_UNINITIALIZED;
+    } else if (reg_values[0].InternalActivity.HaltSuspend) {
+        env->mp_state = WHPX_MP_STATE_HALTED;
+    } else {
+        env->mp_state = WHPX_MP_STATE_RUNNABLE;
+    }
+    env->tsc_deadline = reg_values[1].Reg64;
+}
+
+static void whpx_set_lapic_cpu_state(CPUState *cpu, int level)
+{
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    struct CPUX86State *env = &x86_cpu->env;
+    WHV_REGISTER_NAME reg_name = WHvRegisterInternalActivityState;
+    WHV_REGISTER_VALUE reg_value;
+    HRESULT hr;
+
+    /*
+     * Reset: application processors wait for INIT/SIPI, which the
+     * hypervisor's APIC handles. Full state (loadvm): only the
+     * wait-for-SIPI state is put back; a vCPU that was in HLT simply
+     * resumes after it, which a guest idle loop tolerates.
+     */
+    memset(&reg_value, 0, sizeof(reg_value));
+    if (level >= WHPX_SET_FULL_STATE) {
+        reg_value.InternalActivity.StartupSuspend =
+            env->mp_state == WHPX_MP_STATE_UNINITIALIZED ||
+            env->mp_state == WHPX_MP_STATE_INIT_RECEIVED;
+    } else {
+        reg_value.InternalActivity.StartupSuspend = !cpu_is_bsp(x86_cpu);
+        env->tsc_deadline = 0;
+    }
+    env->mp_state = reg_value.InternalActivity.StartupSuspend ?
+        WHPX_MP_STATE_UNINITIALIZED : WHPX_MP_STATE_RUNNABLE;
+
+    hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
+        whpx_global.partition, cpu->cpu_index, &reg_name, 1, &reg_value);
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to set APIC activity state, hr=%08lx", hr);
+    }
+
+    /*
+     * After the TSC (whpx_set_tsc) and the APIC state (post_load). On
+     * loadvm also write a zero deadline, so that one armed by the VM that
+     * ran before cannot fire into the loaded one; the hypervisor may
+     * refuse that while the timer is not in TSC-deadline mode.
+     */
+    if (env->tsc_deadline || level >= WHPX_SET_FULL_STATE) {
+        reg_name = WHvX64RegisterTscDeadline;
+        memset(&reg_value, 0, sizeof(reg_value));
+        reg_value.Reg64 = env->tsc_deadline;
+        hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
+            whpx_global.partition, cpu->cpu_index, &reg_name, 1, &reg_value);
+        if (FAILED(hr) && env->tsc_deadline) {
+            error_report("WHPX: Failed to set TSC deadline, hr=%08lx", hr);
+        }
+    }
+}
+
+/*
+ * A PIC interrupt queued through WHvRegisterPendingEvent (unlike
+ * WHvRequestInterrupt) does not wake a vCPU halted inside the hypervisor.
+ */
+static void whpx_vcpu_kick_out_of_hlt(CPUState *cpu)
+{
+    WHV_REGISTER_NAME reg_name = WHvRegisterInternalActivityState;
+    WHV_REGISTER_VALUE reg_value;
+    HRESULT hr;
+
+    hr = whp_dispatch.WHvGetVirtualProcessorRegisters(
+        whpx_global.partition, cpu->cpu_index, &reg_name, 1, &reg_value);
+    if (FAILED(hr) || !reg_value.InternalActivity.HaltSuspend) {
+        return;
+    }
+
+    reg_value.InternalActivity.HaltSuspend = 0;
+    hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
+        whpx_global.partition, cpu->cpu_index, &reg_name, 1, &reg_value);
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to leave HLT, hr=%08lx", hr);
+    }
+}
+
+static void whpx_request_interrupt(WHV_INTERRUPT_TYPE type, bool logical,
+                                   bool level, uint32_t dest, uint32_t vector)
+{
+    WHV_INTERRUPT_CONTROL interrupt;
+    HRESULT hr;
+
+    memset(&interrupt, 0, sizeof(interrupt));
+    interrupt.Type = type;
+    interrupt.DestinationMode = logical ?
+        WHvX64InterruptDestinationModeLogical :
+        WHvX64InterruptDestinationModePhysical;
+    interrupt.TriggerMode = level ?
+        WHvX64InterruptTriggerModeLevel : WHvX64InterruptTriggerModeEdge;
+    interrupt.Destination = dest;
+    interrupt.Vector = vector;
+
+    hr = whp_dispatch.WHvRequestInterrupt(whpx_global.partition,
+                                          &interrupt, sizeof(interrupt));
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to request interrupt type %d dest %u "
+                     "vector %u, hr=%08lx", (int)type, dest, vector, hr);
+    }
+}
+
+static void whpx_send_msi(MSIMessage *msg)
+{
+    uint64_t addr = msg->address;
+    uint32_t data = msg->data;
+    uint8_t dest = (addr & MSI_ADDR_DEST_ID_MASK) >> MSI_ADDR_DEST_ID_SHIFT;
+    uint8_t vector = (data & MSI_DATA_VECTOR_MASK) >> MSI_DATA_VECTOR_SHIFT;
+    uint8_t dest_mode = (addr >> MSI_ADDR_DEST_MODE_SHIFT) & 0x1;
+    uint8_t trigger_mode = (data >> MSI_DATA_TRIGGER_SHIFT) & 0x1;
+    uint8_t delivery = (data >> MSI_DATA_DELIVERY_MODE_SHIFT) & 0x7;
+
+    switch (delivery) {
+    case APIC_DM_FIXED:
+    case APIC_DM_LOWPRI:
+        /* A masked-out / not yet programmed source (upstream 9533cc6d3604) */
+        if (vector == 0) {
+            return;
+        }
+        break;
+    case APIC_DM_NMI:
+    case APIC_DM_INIT:
+        break;
+    default:
+        /* SMI and ExtINT cannot be requested; the QEMU APIC drops them too. */
+        return;
+    }
+
+    /* WHV_INTERRUPT_TYPE values are the APIC delivery modes. */
+    whpx_request_interrupt((WHV_INTERRUPT_TYPE)delivery, dest_mode,
+                           trigger_mode, dest, vector);
+}
+
+static uint64_t whpx_apic_mem_read(void *opaque, hwaddr addr, unsigned size)
+{
+    return ~(uint64_t)0;
+}
+
+static void whpx_apic_mem_write(void *opaque, hwaddr addr,
+                                uint64_t data, unsigned size)
+{
+    MSIMessage msg = { .address = addr, .data = data };
+
+    whpx_send_msi(&msg);
+}
+
+static const MemoryRegionOps whpx_apic_io_ops = {
+    .read = whpx_apic_mem_read,
+    .write = whpx_apic_mem_write,
+    .impl.min_access_size = 1,
+    .impl.max_access_size = 4,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+static void whpx_apic_set_base(APICCommonState *s, uint64_t val)
+{
+    s->apicbase = val;
+}
+
+/* Same encoding as the other APIC models: the argument is TPR[7:4]. */
+static void whpx_apic_set_tpr(APICCommonState *s, uint8_t val)
+{
+    s->tpr = (val & 0x0f) << 4;
+}
+
+static uint8_t whpx_apic_get_tpr(APICCommonState *s)
+{
+    return s->tpr >> 4;
+}
+
+static void whpx_apic_vapic_base_update(APICCommonState *s)
+{
+    /* No TPR patching: the hypervisor handles TPR accesses itself. */
+}
+
+static void whpx_apic_external_nmi(APICCommonState *s)
+{
+    whpx_request_interrupt(WHvX64InterruptTypeNmi, false, false, s->id, 2);
+}
+
+static void whpx_apic_post_load(APICCommonState *s)
+{
+    run_on_cpu(CPU(s->cpu), whpx_apic_put, RUN_ON_CPU_HOST_PTR(s));
+}
+
+static void whpx_apic_reset(APICCommonState *s)
+{
+    /* Not used: INIT/SIPI are handled by the hypervisor. */
+    s->wait_for_sipi = 0;
+
+    run_on_cpu(CPU(s->cpu), whpx_apic_put, RUN_ON_CPU_HOST_PTR(s));
+}
+
+static void whpx_apic_realize(DeviceState *dev, Error **errp)
+{
+    APICCommonState *s = APIC_COMMON(dev);
+
+    memory_region_init_io(&s->io_memory, OBJECT(s), &whpx_apic_io_ops, s,
+                          "whpx-apic-msi", APIC_SPACE_SIZE);
+
+    msi_nonbroken = true;
+}
+
+static void whpx_apic_unrealize(DeviceState *dev, Error **errp)
+{
+}
+
+static void whpx_apic_class_init(ObjectClass *klass, void *data)
+{
+    APICCommonClass *k = APIC_COMMON_CLASS(klass);
+
+    k->realize = whpx_apic_realize;
+    k->unrealize = whpx_apic_unrealize;
+    k->reset = whpx_apic_reset;
+    k->set_base = whpx_apic_set_base;
+    k->set_tpr = whpx_apic_set_tpr;
+    k->get_tpr = whpx_apic_get_tpr;
+    k->post_load = whpx_apic_post_load;
+    k->vapic_base_update = whpx_apic_vapic_base_update;
+    k->external_nmi = whpx_apic_external_nmi;
+    k->send_msi = whpx_send_msi;
+}
+
+static const TypeInfo whpx_apic_info = {
+    .name = "whpx-apic",
+    .parent = TYPE_APIC_COMMON,
+    .instance_size = sizeof(APICCommonState),
+    .class_init = whpx_apic_class_init,
+};
+
+/*
  * MAS: the event the hypervisor is about to deliver
  * (WHvRegisterPendingInterruption) is vCPU state like any register. When
  * whpx_vcpu_pre_run() queues an interrupt, the local APIC has already moved
@@ -502,7 +919,7 @@ static void whpx_set_registers(CPUState *cpu, int level)
     vcxt.values[idx].Table.Limit = env->gdt.limit;
     idx += 1;
 
-    /* CR0, 2, 3, 4, 8 */
+    /* CR0, 2, 3, 4 (CR8 is last) */
     assert(whpx_register_names[idx] == WHvX64RegisterCr0);
     vcxt.values[idx++].Reg64 = env->cr[0];
     assert(whpx_register_names[idx] == WHvX64RegisterCr2);
@@ -511,8 +928,6 @@ static void whpx_set_registers(CPUState *cpu, int level)
     vcxt.values[idx++].Reg64 = env->cr[3];
     assert(whpx_register_names[idx] == WHvX64RegisterCr4);
     vcxt.values[idx++].Reg64 = env->cr[4];
-    assert(whpx_register_names[idx] == WHvX64RegisterCr8);
-    vcxt.values[idx++].Reg64 = vcpu->tpr;
 
     /* 8 Debug Registers - Skipped */
 
@@ -590,12 +1005,16 @@ static void whpx_set_registers(CPUState *cpu, int level)
 
     /* Interrupt / Event Registers - Skipped */
 
+    /* CR8, left out by whpx_register_count() with the hypervisor's APIC */
+    assert(whpx_register_names[idx] == WHvX64RegisterCr8);
+    vcxt.values[idx++].Reg64 = vcpu->tpr;
+
     assert(idx == RTL_NUMBER_OF(whpx_register_names));
 
     hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
         whpx->partition, cpu->cpu_index,
         whpx_register_names,
-        RTL_NUMBER_OF(whpx_register_names),
+        whpx_register_count(),
         &vcxt.values[0]);
 
     if (FAILED(hr)) {
@@ -605,6 +1024,9 @@ static void whpx_set_registers(CPUState *cpu, int level)
 
     if (level >= WHPX_SET_RESET_STATE) {
         whpx_set_pending_interruption(cpu, level >= WHPX_SET_FULL_STATE);
+        if (whpx_apic_in_platform()) {
+            whpx_set_lapic_cpu_state(cpu, level);
+        }
     }
 
     return;
@@ -671,7 +1093,7 @@ static void whpx_get_registers(CPUState *cpu)
     hr = whp_dispatch.WHvGetVirtualProcessorRegisters(
         whpx->partition, cpu->cpu_index,
         whpx_register_names,
-        RTL_NUMBER_OF(whpx_register_names),
+        whpx_register_count(),
         &vcxt.values[0]);
     if (FAILED(hr)) {
         error_report("WHPX: Failed to get virtual processor context, hr=%08lx",
@@ -712,7 +1134,7 @@ static void whpx_get_registers(CPUState *cpu)
     env->gdt.limit = vcxt.values[idx].Table.Limit;
     idx += 1;
 
-    /* CR0, 2, 3, 4, 8 */
+    /* CR0, 2, 3, 4 (CR8 is last) */
     assert(whpx_register_names[idx] == WHvX64RegisterCr0);
     env->cr[0] = vcxt.values[idx++].Reg64;
     assert(whpx_register_names[idx] == WHvX64RegisterCr2);
@@ -721,12 +1143,6 @@ static void whpx_get_registers(CPUState *cpu)
     env->cr[3] = vcxt.values[idx++].Reg64;
     assert(whpx_register_names[idx] == WHvX64RegisterCr4);
     env->cr[4] = vcxt.values[idx++].Reg64;
-    assert(whpx_register_names[idx] == WHvX64RegisterCr8);
-    tpr = vcxt.values[idx++].Reg64;
-    if (tpr != vcpu->tpr) {
-        vcpu->tpr = tpr;
-        cpu_set_apic_tpr(x86_cpu->apic_state, tpr);
-    }
 
     /* 8 Debug Registers - Skipped */
 
@@ -804,9 +1220,25 @@ static void whpx_get_registers(CPUState *cpu)
 
     /* Interrupt / Event Registers - Skipped */
 
+    assert(whpx_register_names[idx] == WHvX64RegisterCr8);
+    if (!whpx_apic_in_platform()) {
+        tpr = vcxt.values[idx].Reg64;
+        if (tpr != vcpu->tpr) {
+            vcpu->tpr = tpr;
+            cpu_set_apic_tpr(x86_cpu->apic_state, tpr);
+        }
+    }
+    idx++;
+
     assert(idx == RTL_NUMBER_OF(whpx_register_names));
 
     whpx_get_pending_interruption(cpu);
+
+    if (whpx_apic_in_platform()) {
+        /* TPR, IRR/ISR, LVTs, timer: all live in the hypervisor's APIC */
+        whpx_apic_get(cpu);
+        whpx_get_lapic_cpu_state(cpu);
+    }
 
     return;
 }
@@ -1056,8 +1488,9 @@ static void whpx_vcpu_pre_run(CPUState *cpu)
     uint8_t tpr;
     WHV_X64_PENDING_INTERRUPTION_REGISTER new_int;
     UINT32 reg_count = 0;
-    WHV_REGISTER_VALUE reg_values[3];
-    WHV_REGISTER_NAME reg_names[3];
+    WHV_REGISTER_VALUE reg_values[4];
+    WHV_REGISTER_NAME reg_names[4];
+    bool leave_hlt = false;
 
     memset(&new_int, 0, sizeof(new_int));
     memset(reg_values, 0, sizeof(reg_values));
@@ -1094,17 +1527,37 @@ static void whpx_vcpu_pre_run(CPUState *cpu)
     }
 
     /* Get pending hard interruption or replay one that was overwritten */
-    if (!vcpu->interruption_pending &&
-        vcpu->interruptable && (env->eflags & IF_MASK)) {
-        assert(!new_int.InterruptionPending);
-        if (cpu->interrupt_request & CPU_INTERRUPT_HARD) {
-            cpu->interrupt_request &= ~CPU_INTERRUPT_HARD;
-            irq = cpu_get_pic_interrupt(env);
-            if (irq >= 0) {
-                new_int.InterruptionType = WHvX64PendingInterrupt;
-                new_int.InterruptionPending = 1;
-                new_int.InterruptionVector = irq;
+    if (!whpx_apic_in_platform()) {
+        if (!vcpu->interruption_pending &&
+            vcpu->interruptable && (env->eflags & IF_MASK)) {
+            assert(!new_int.InterruptionPending);
+            if (cpu->interrupt_request & CPU_INTERRUPT_HARD) {
+                cpu->interrupt_request &= ~CPU_INTERRUPT_HARD;
+                irq = cpu_get_pic_interrupt(env);
+                if (irq >= 0) {
+                    new_int.InterruptionType = WHvX64PendingInterrupt;
+                    new_int.InterruptionPending = 1;
+                    new_int.InterruptionVector = irq;
+                }
             }
+        }
+    } else if (vcpu->ready_for_pic_interrupt &&
+               (cpu->interrupt_request & CPU_INTERRUPT_HARD)) {
+        /*
+         * With the hypervisor's APIC only the PIC raises
+         * CPU_INTERRUPT_HARD; hand its vector over as an ExtINT once the
+         * interrupt window is open.
+         */
+        cpu->interrupt_request &= ~CPU_INTERRUPT_HARD;
+        irq = cpu_get_pic_interrupt(env);
+        if (irq >= 0) {
+            reg_values[reg_count].ExtIntEvent.EventPending = 1;
+            reg_values[reg_count].ExtIntEvent.EventType =
+                WHvX64PendingEventExtInt;
+            reg_values[reg_count].ExtIntEvent.Vector = irq;
+            reg_names[reg_count] = WHvRegisterPendingEvent;
+            reg_count += 1;
+            leave_hlt = true;
         }
     }
 
@@ -1113,11 +1566,12 @@ static void whpx_vcpu_pre_run(CPUState *cpu)
         reg_values[reg_count].PendingInterruption = new_int;
         reg_names[reg_count] = WHvRegisterPendingInterruption;
         reg_count += 1;
+        leave_hlt = true;
     }
 
     /* Sync the TPR to the CR8 if was modified during the intercept */
     tpr = cpu_get_apic_tpr(x86_cpu->apic_state);
-    if (tpr != vcpu->tpr) {
+    if (!whpx_apic_in_platform() && tpr != vcpu->tpr) {
         vcpu->tpr = tpr;
         reg_values[reg_count].Reg64 = tpr;
         cpu->exit_request = 1;
@@ -1136,6 +1590,7 @@ static void whpx_vcpu_pre_run(CPUState *cpu)
     }
 
     qemu_mutex_unlock_iothread();
+    vcpu->ready_for_pic_interrupt = false;
 
     if (reg_count) {
         hr = whp_dispatch.WHvSetVirtualProcessorRegisters(
@@ -1145,6 +1600,11 @@ static void whpx_vcpu_pre_run(CPUState *cpu)
             error_report("WHPX: Failed to set interrupt state registers,"
                          " hr=%08lx", hr);
         }
+    }
+
+    /* Events queued above do not end a HLT inside the hypervisor. */
+    if (leave_hlt && whpx_apic_in_platform()) {
+        whpx_vcpu_kick_out_of_hlt(cpu);
     }
 
     return;
@@ -1158,7 +1618,7 @@ static void whpx_vcpu_post_run(CPUState *cpu)
     env->eflags = vcpu->exit_ctx.VpContext.Rflags;
 
     uint64_t tpr = vcpu->exit_ctx.VpContext.Cr8;
-    if (vcpu->tpr != tpr) {
+    if (!whpx_apic_in_platform() && vcpu->tpr != tpr) {
         vcpu->tpr = tpr;
         qemu_mutex_lock_iothread();
         cpu_set_apic_tpr(x86_cpu->apic_state, vcpu->tpr);
@@ -1228,11 +1688,12 @@ static void whpx_vcpu_process_async_events(CPUState *cpu)
 enum {
     WXS_MMIO_HPET, WXS_MMIO_LAPIC, WXS_MMIO_IOAPIC, WXS_MMIO_OTHER,
     WXS_PIO, WXS_HALT, WXS_IRQ_WINDOW, WXS_CANCELED, WXS_MSR, WXS_CPUID,
-    WXS_OTHER, WXS_COUNT
+    WXS_APIC_EOI, WXS_OTHER, WXS_COUNT
 };
 static const char *const whpx_exit_stat_names[WXS_COUNT] = {
     "mmio-hpet", "mmio-lapic", "mmio-ioapic", "mmio-other",
-    "pio", "halt", "irq-window", "canceled", "msr", "cpuid", "other"
+    "pio", "halt", "irq-window", "canceled", "msr", "cpuid", "apic-eoi",
+    "other"
 };
 static uint64_t whpx_exit_stats[WXS_COUNT];
 static uint64_t whpx_exit_stats_last_ms;
@@ -1272,6 +1733,7 @@ static void whpx_exit_stats_account(const WHV_RUN_VP_EXIT_CONTEXT *ctx)
     case WHvRunVpExitReasonCanceled: k = WXS_CANCELED; break;
     case WHvRunVpExitReasonX64MsrAccess: k = WXS_MSR; break;
     case WHvRunVpExitReasonX64Cpuid: k = WXS_CPUID; break;
+    case WHvRunVpExitReasonX64ApicEoi: k = WXS_APIC_EOI; break;
     default: k = WXS_OTHER; break;
     }
     atomic_inc(&whpx_exit_stats[k]);
@@ -1301,7 +1763,8 @@ static int whpx_vcpu_run(CPUState *cpu)
     int ret;
 
     whpx_vcpu_process_async_events(cpu);
-    if (cpu->halted) {
+    /* With the hypervisor's APIC, HLT and wait-for-SIPI stay inside it. */
+    if (cpu->halted && !whpx_apic_in_platform()) {
         cpu->exception_index = EXCP_HLT;
         atomic_set(&cpu->exit_request, false);
         return 0;
@@ -1346,7 +1809,16 @@ static int whpx_vcpu_run(CPUState *cpu)
             break;
 
         case WHvRunVpExitReasonX64InterruptWindow:
+            vcpu->ready_for_pic_interrupt = true;
             vcpu->window_registered = 0;
+            ret = 0;
+            break;
+
+        case WHvRunVpExitReasonX64ApicEoi:
+            /* EOI of a level-triggered vector: let the IOAPIC resample. */
+            qemu_mutex_lock_iothread();
+            ioapic_eoi_broadcast(vcpu->exit_ctx.ApicEoi.InterruptVector);
+            qemu_mutex_unlock_iothread();
             ret = 0;
             break;
 
@@ -1410,6 +1882,10 @@ static int whpx_vcpu_run(CPUState *cpu)
                     rcx =
                         vcpu->exit_ctx.CpuidAccess.DefaultResultRcx |
                         CPUID_EXT_HYPERVISOR;
+                    /* The hypervisor's APIC runs in xAPIC mode only. */
+                    if (whpx_apic_in_platform()) {
+                        rcx &= ~CPUID_EXT_X2APIC;
+                    }
 
                     rdx = vcpu->exit_ctx.CpuidAccess.DefaultResultRdx;
                     rbx = vcpu->exit_ctx.CpuidAccess.DefaultResultRbx;
@@ -2089,6 +2565,78 @@ static void whpx_disable_xsave(struct whpx_state *whpx)
     whpx_xsave_cap.AsUINT64 = 0;
 }
 
+/*
+ * MAS: let the hypervisor emulate the local APICs, so that IPIs, EOIs and
+ * the APIC timer no longer exit to QEMU. Opt-in until validated:
+ *   ANDROID_EMU_WHPX_KERNEL_IRQCHIP=1  on, where the host supports it; kept
+ *                                      off on Windows 10 (upstream QEMU
+ *                                      3b124791bdce does the same with a PIC)
+ *   ANDROID_EMU_WHPX_KERNEL_IRQCHIP=2  on, Windows 10 included
+ *   -machine kernel-irqchip=on         required: fail if unavailable
+ *   -machine kernel-irqchip=off        off, whatever the variable says
+ * Must run before WHvSetupPartition().
+ */
+static int whpx_init_kernel_irqchip(MachineState *ms, struct whpx_state *whpx)
+{
+    const char *env = getenv("ANDROID_EMU_WHPX_KERNEL_IRQCHIP");
+    bool required = machine_kernel_irqchip_required(ms);
+    bool wanted = required || (env && (env[0] == '1' || env[0] == '2'));
+    bool any_windows = required || (env && env[0] == '2');
+    WHV_CAPABILITY_FEATURES features;
+    WHV_PROCESSOR_PERFMON_FEATURES perfmon;
+    WHV_X64_LOCAL_APIC_EMULATION_MODE mode =
+        WHvX64LocalApicEmulationModeXApic;
+    UINT32 size;
+    HRESULT hr;
+
+    whpx_kernel_irqchip = false;
+
+    if (!machine_kernel_irqchip_allowed(ms) || !wanted) {
+        return 0;
+    }
+
+    memset(&features, 0, sizeof(features));
+    hr = whp_dispatch.WHvGetCapability(WHvCapabilityCodeFeatures, &features,
+                                       sizeof(features), &size);
+    if (FAILED(hr) || !features.LocalApicEmulation ||
+        !whp_dispatch.WHvRequestInterrupt ||
+        !whp_dispatch.WHvGetVirtualProcessorInterruptControllerState2 ||
+        !whp_dispatch.WHvSetVirtualProcessorInterruptControllerState2) {
+        error_report("WHPX: APIC emulation in the hypervisor is not available"
+                     " on this Windows build (hr=%08lx)", hr);
+        return required ? -EINVAL : 0;
+    }
+
+    /*
+     * Same test as upstream QEMU (68438cb3cbcb): the perfmon capability
+     * exists from Windows Server 2022 / Windows 11 on.
+     */
+    if (!any_windows) {
+        memset(&perfmon, 0, sizeof(perfmon));
+        hr = whp_dispatch.WHvGetCapability(
+            WHvCapabilityCodeProcessorPerfmonFeatures, &perfmon,
+            sizeof(perfmon), &size);
+        if (FAILED(hr)) {
+            printf("WHPX: keeping the local APIC in QEMU on this Windows"
+                   " build; ANDROID_EMU_WHPX_KERNEL_IRQCHIP=2 forces it\n");
+            return 0;
+        }
+    }
+
+    hr = whp_dispatch.WHvSetPartitionProperty(
+        whpx->partition, WHvPartitionPropertyCodeLocalApicEmulationMode,
+        &mode, sizeof(mode));
+    if (FAILED(hr)) {
+        error_report("WHPX: Failed to enable APIC emulation in the"
+                     " hypervisor, hr=%08lx", hr);
+        return required ? -EINVAL : 0;
+    }
+
+    whpx_kernel_irqchip = true;
+    printf("WHPX: local APIC emulated by the hypervisor (xAPIC)\n");
+    return 0;
+}
+
 static int whpx_accel_init(MachineState *ms)
 {
     struct whpx_state *whpx;
@@ -2162,6 +2710,11 @@ static int whpx_accel_init(MachineState *ms)
         goto error;
     }
 
+    ret = whpx_init_kernel_irqchip(ms, whpx);
+    if (ret) {
+        goto error;
+    }
+
     memset(&prop, 0, sizeof(WHV_PARTITION_PROPERTY));
     prop.ExtendedVmExits.X64MsrExit = 1;
     prop.ExtendedVmExits.X64CpuidExit = 1;
@@ -2217,6 +2770,8 @@ static int whpx_accel_init(MachineState *ms)
 
   error:
 
+    whpx_kernel_irqchip = false;
+
     if (NULL != whpx->partition) {
         whp_dispatch.WHvDeletePartition(whpx->partition);
         whpx->partition = NULL;
@@ -2248,6 +2803,7 @@ static const TypeInfo whpx_accel_type = {
 static void whpx_type_init(void)
 {
     type_register_static(&whpx_accel_type);
+    type_register_static(&whpx_apic_info);
 }
 
 bool init_whp_dispatch() {
