@@ -2005,18 +2005,44 @@ static void whpx_cpu_update_state(void *opaque, int running, RunState state)
  * a TSC that is ahead of its own virtual clock and loadvm repeats the jump.
  * Stop the partition's time together with the virtual clock; the TSC read
  * for savevm is then the value at the moment the VM stopped.
+ *
+ * "Together" is not quite true: do_vm_stop() stops the virtual clock
+ * (cpu_disable_ticks) before pause_all_vcpus(), and this handler only runs
+ * once every vCPU has been kicked out of the hypervisor and has parked, so
+ * the TSC runs on alone for that long, and more so the more vCPUs there are.
+ * On the way back the virtual clock starts first (cpu_enable_ticks) and the
+ * TSC only here, which gives some of it back. With 8 or more vCPUs what is
+ * left can exceed the few hundred microseconds the Linux clocksource
+ * watchdog allows between the TSC and the HPET, and the guest drops the TSC.
+ * The TSC cannot be moved back (the guest has already read those values),
+ * so keep it suspended on resume until the virtual clock has run as long
+ * as the TSC ran alone on stop.
  */
+static int64_t whpx_vclock_offset;  /* cpu_get_clock() - get_clock() */
+static bool whpx_vclock_offset_valid;
+static int64_t whpx_vclock_stopped; /* cpu_get_clock() while stopped */
+static int64_t whpx_tsc_lead;       /* ns the TSC ran on alone at stop */
+
 static void whpx_vm_state_change(void *opaque, int running, RunState state)
 {
     struct whpx_state *whpx = &whpx_global;
     HRESULT hr;
+    int64_t now, left;
 
     if (!running) {
         if (whp_dispatch.WHvSuspendPartitionTime) {
+            now = get_clock();
             hr = whp_dispatch.WHvSuspendPartitionTime(whpx->partition);
             if (FAILED(hr)) {
                 warn_report("WHPX: Failed to suspend partition time,"
                             " hr=%08lx", hr);
+            }
+            whpx_vclock_stopped = cpu_get_clock();
+            whpx_tsc_lead = 0;
+            if (SUCCEEDED(hr) && whpx_vclock_offset_valid) {
+                /* host time now minus host time at cpu_disable_ticks() */
+                now -= whpx_vclock_stopped - whpx_vclock_offset;
+                whpx_tsc_lead = MIN(MAX(now, 0), NANOSECONDS_PER_SECOND);
             }
         }
     } else if (whp_dispatch.WHvResumePartitionTime) {
@@ -2026,11 +2052,23 @@ static void whpx_vm_state_change(void *opaque, int running, RunState state)
          * WHvResumePartitionTime the first WHvRunVirtualProcessor call
          * resumes it.
          */
+        while (whpx_tsc_lead > 0) {
+            left = whpx_vclock_stopped + whpx_tsc_lead - cpu_get_clock();
+            if (left <= 0) {
+                break;
+            }
+            if (left > 2 * SCALE_MS) {
+                g_usleep((left - SCALE_MS) / SCALE_US);
+            }
+        }
+        whpx_tsc_lead = 0;
         hr = whp_dispatch.WHvResumePartitionTime(whpx->partition);
         if (FAILED(hr)) {
             warn_report("WHPX: Failed to resume partition time,"
                         " hr=%08lx", hr);
         }
+        whpx_vclock_offset = cpu_get_clock() - get_clock();
+        whpx_vclock_offset_valid = true;
     }
 }
 
