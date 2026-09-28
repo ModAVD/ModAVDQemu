@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <istream>
 #include <iterator>
 #include <memory>
@@ -25,6 +26,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QBackingStore>
 #include <QBitmap>
 #include <QByteArray>
 #include <QClipboard>
@@ -2456,6 +2458,37 @@ void ToolWindow::paintEvent(QPaintEvent*) {
         p.drawRect(QRect(0, 0, width() - 1, height() - 1));
     }
     p.end();
+    rebuildBackingStoreIfStale();
+}
+
+// Qt resizes a window's backing store only when the window's logical size
+// changes. When just the device pixel ratio changes under this fixed-size
+// window (e.g. the emulator started while the monitor was off and Windows
+// reported 96 DPI, then the monitor came back at 150%), the store keeps its old
+// device size and only its top-left part of the toolbar gets painted. Resize
+// the store once the image it paints into no longer matches the window; at
+// most once per ratio, so a mismatch the resize cannot fix never loops.
+void ToolWindow::rebuildBackingStoreIfStale() {
+    QBackingStore* store = backingStore();
+    QPaintDevice* device = store ? store->paintDevice() : nullptr;
+    const qreal dpr = devicePixelRatio();
+    if (!device || dpr == mBackingStoreRebuiltDpr) {
+        return;
+    }
+    if (std::abs(device->width() - width() * dpr) <= 2 &&
+        std::abs(device->height() - height() * dpr) <= 2) {
+        return;
+    }
+    mBackingStoreRebuiltDpr = dpr;
+    QTimer::singleShot(0, this, [this] {
+        if (QBackingStore* store = backingStore()) {
+            // Go through another size first in case a resize to the same
+            // logical size is skipped.
+            store->resize(size() + QSize(1, 1));
+            store->resize(size());
+        }
+        update();
+    });
 }
 
 void ToolWindow::notifySwitchOnTop() {

@@ -208,6 +208,7 @@ private:
     virtual void mousePressEvent(QMouseEvent* event) override;
     virtual void paintEvent(QPaintEvent*) override;
     virtual void hideEvent(QHideEvent* event) override;
+    void rebuildBackingStoreIfStale();
 
     EmulatorQtWindow* mEmulatorWindow;
     android::base::MemberOnDemandT<ExtendedWindowHolder,
@@ -232,6 +233,7 @@ private:
     UIEventRecorderPtr mUIEventRecorder;
     UserActionsCounterPtr mUserActionsCounter;
     bool mTopSwitched = false;
+    qreal mBackingStoreRebuiltDpr = 0;
 
     bool mIsExiting = false;
     bool mAskedWhetherToSaveSnapshot = false;
