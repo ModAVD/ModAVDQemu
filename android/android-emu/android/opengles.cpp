@@ -464,6 +464,20 @@ static int startOpenglesRendererImpl(
         android::featurecontrol::makeReadOnly(aemuFeature);
     }
 
+    // MAS: ANDROID_EMU_VK_CACHED_COHERENT=1 offers the guest only host-cached memory types as
+    // coherent. Without it a game (or ANGLE) mapping HOST_COHERENT memory gets the host's
+    // write-combined type on NVIDIA, and its uploads through that mapping take a third of the
+    // render thread under WHPX.
+    if (const char* env = getenv("ANDROID_EMU_VK_CACHED_COHERENT")) {
+        if (env[0] == '1') {
+            gfxstreamFeatures.VulkanDisableCoherentMemoryAndEmulate.setEnabled(true);
+            absl::StrAppend(&reportGfxstreamFeatures,
+                            gfxstreamFeatures.VulkanDisableCoherentMemoryAndEmulate.getName(), ", ");
+            dinfo("Vulkan: only host-cached memory is coherent for the guest "
+                  "(ANDROID_EMU_VK_CACHED_COHERENT)");
+        }
+    }
+
     std::string maxGuestVulkan = "1.3";
     if (const char* env = getenv("ANDROID_EMU_VK_ENABLE_1_4")) {
         // Allow force-enabling with env variable for tests
