@@ -343,12 +343,11 @@ bool Quickboot::load(const char* name) {
                 ->settings->android_cmdLineOptions()
                 ->no_snapshot_load) {
         if (!getConsoleAgents()->settings->hw()->fastboot_forceColdBoot) {
-            // Only display a message if this is a one-time-like thing (command
-            // line), and not an AVD option.
-            mWindow.showMessage(
-                    "Emulator is performing a full startup. This may take upto "
-                    "two minutes, or more.",
-                    WINDOW_MESSAGE_OK, kDefaultMessageTimeoutMs);
+            // Only log this for a one-time-like thing (command line), and not
+            // an AVD option. No window message: a launcher that always passes
+            // -no-snapshot-load would get the same toast on every start.
+            dinfo("Emulator is performing a full startup. This may take upto "
+                  "two minutes, or more.");
         }
         reportFailedLoad(
                 getConsoleAgents()->settings->hw()->fastboot_forceColdBoot
