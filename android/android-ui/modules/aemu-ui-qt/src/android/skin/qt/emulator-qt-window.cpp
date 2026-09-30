@@ -2175,8 +2175,15 @@ void EmulatorQtWindow::slot_fill(SkinSurface* s,
 void EmulatorQtWindow::slot_getDevicePixelRatio(double* out_dpr,
                                                 QSemaphore* semaphore) {
     QSemaphoreReleaser semReleaser(semaphore);
-    auto screen = window()->windowHandle() ? window()->windowHandle()->screen()
-                                           : nullptr;
+    // skin_window_create() asks for the ratio before the first showWindow(),
+    // when the top-level window has no QWindow yet. Answering 1.0 there made
+    // the first native GL subwindow logical-size in device pixels (2/3 of the
+    // display area at 150%), so until the guest's first frame only that
+    // top-left part kept the skin background. Use the screen the window is
+    // about to be shown on instead; QWidget::screen() falls back to the
+    // primary screen.
+    QWindow* handle = window()->windowHandle();
+    QScreen* screen = handle ? handle->screen() : window()->screen();
     *out_dpr = screen ? screen->devicePixelRatio() : 1.0;
 }
 
