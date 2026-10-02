@@ -38,6 +38,7 @@
 #include "trace.h"
 #include "qemu/sockets.h"
 #include "qemu/cutils.h"
+#include "qemu/error-report.h"
 
 /* this must come after including "trace.h" */
 #include <shlobj.h>
@@ -149,6 +150,65 @@ void qemu_anon_ram_free(void *ptr, size_t size)
     if (ptr) {
         VirtualFree(ptr, 0, MEM_RELEASE);
     }
+}
+
+typedef DWORD (WINAPI *DiscardVirtualMemoryFunc)(PVOID, SIZE_T);
+
+/*
+ * Used by ram_block_discard_range() (virtio-balloon free page reporting).
+ *
+ * DiscardVirtualMemory (Windows 8.1+) drops the pages from the working set
+ * and frees the physical memory at once; the range stays committed and
+ * PAGE_READWRITE, and the next touch maps a page again. MEM_RESET alone only
+ * marks the pages clean: they stay in the working set until the memory
+ * manager trims it, so nothing visible is freed. The fallback therefore
+ * pairs it with VirtualUnlock on unlocked memory, which removes the pages
+ * from the working set; being clean, they are then repurposed instead of
+ * written to the page file. OfferVirtualMemory is not usable: offered pages
+ * are inaccessible until ReclaimVirtualMemory, and the guest may touch a
+ * reported page again at any time without telling us.
+ */
+int qemu_win32_discard_memory(void *addr, size_t length)
+{
+    static DiscardVirtualMemoryFunc discard_fn;
+    static bool resolved;
+    static int failures;
+    DWORD err;
+
+    if (!resolved) {
+        HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+        discard_fn = k32 ? (DiscardVirtualMemoryFunc)
+                     GetProcAddress(k32, "DiscardVirtualMemory") : NULL;
+        resolved = true;
+        info_report("qemu_win32_discard_memory: using %s",
+                    discard_fn ? "DiscardVirtualMemory"
+                               : "MEM_RESET + VirtualUnlock");
+    }
+
+    if (discard_fn) {
+        err = discard_fn(addr, length);
+        if (err == ERROR_SUCCESS) {
+            return 0;
+        }
+    } else {
+        err = ERROR_PROC_NOT_FOUND;
+    }
+
+    /* DiscardVirtualMemory missing or failed: the range is unchanged. */
+    if (VirtualAlloc(addr, length, MEM_RESET, PAGE_READWRITE)) {
+        /* Fails with ERROR_NOT_LOCKED by design, but trims the pages. */
+        VirtualUnlock(addr, length);
+        return 0;
+    }
+
+    if (failures < 5) {
+        failures++;
+        error_report("qemu_win32_discard_memory: %p +0x%zx failed "
+                     "(DiscardVirtualMemory %lu, MEM_RESET %lu)",
+                     addr, length, (unsigned long)err,
+                     (unsigned long)GetLastError());
+    }
+    return -EINVAL;
 }
 
 #ifndef CONFIG_LOCALTIME_R

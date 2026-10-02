@@ -267,6 +267,14 @@ void *qemu_memalign(size_t alignment, size_t size);
 void *qemu_anon_ram_alloc(size_t size, uint64_t *align, bool shared);
 void qemu_vfree(void *ptr);
 void qemu_anon_ram_free(void *ptr, size_t size);
+#ifdef _WIN32
+/*
+ * Give the physical pages behind committed private memory back to the
+ * system while keeping the range committed and accessible. Afterwards
+ * each page reads either its old contents or zero. Returns 0 or -errno.
+ */
+int qemu_win32_discard_memory(void *addr, size_t length);
+#endif
 
 extern bool insufficientMemMessage;
 

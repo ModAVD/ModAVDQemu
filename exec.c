@@ -2021,6 +2021,11 @@ size_t qemu_ram_pagesize(RAMBlock *rb)
     return rb->page_size;
 }
 
+ram_addr_t qemu_ram_get_used_length(RAMBlock *rb)
+{
+    return rb->used_length;
+}
+
 /* Returns the largest size of page in use */
 size_t qemu_ram_pagesize_largest(void)
 {
@@ -4281,7 +4286,9 @@ int ram_block_discard_range(RAMBlock *rb, uint64_t start, size_t length)
     }
 
     if ((start + length) <= rb->used_length) {
+#ifndef _WIN32
         bool need_madvise, need_fallocate;
+#endif
         uint8_t *host_endaddr = host_startaddr + length;
         if ((uintptr_t)host_endaddr & (rb->page_size - 1)) {
             error_report("ram_block_discard_range: Unaligned end address: %p",
@@ -4291,6 +4298,36 @@ int ram_block_discard_range(RAMBlock *rb, uint64_t start, size_t length)
 
         errno = ENOTSUP; /* If we are missing MADVISE etc */
 
+#ifdef _WIN32
+        /*
+         * Windows has no madvise/fallocate. Anonymous guest RAM comes from
+         * VirtualAlloc(MEM_COMMIT) in qemu_anon_ram_alloc(); drop the
+         * physical pages behind the range and keep it committed, so a later
+         * access (host or guest through the WHPX mapping) faults in a page
+         * again. The contents afterwards are either the old ones or zero.
+         * File-backed (Quick Boot ram.img mapping), user-backed and
+         * preallocated blocks are not ours to discard.
+         */
+        if (rb->fd != -1 || (rb->flags & (RAM_USER_BACKED | RAM_PREALLOC))) {
+            static bool warned;
+
+            ret = -ENOTSUP;
+            if (!warned) {
+                warned = true;
+                warn_report("ram_block_discard_range: block '%s' is not "
+                            "anonymous memory (fd %d, flags 0x%x); discard "
+                            "is skipped for it on Windows",
+                            rb->idstr, rb->fd, rb->flags);
+            }
+            goto err;
+        }
+        ret = qemu_win32_discard_memory(host_startaddr, length);
+        if (ret) {
+            goto err;
+        }
+        trace_ram_block_discard_range(rb->idstr, host_startaddr, length,
+                                      true, false, ret);
+#else
         /* The logic here is messy;
          *    madvise DONTNEED fails for hugepages
          *    fallocate works on hugepages and shmem
@@ -4345,6 +4382,7 @@ int ram_block_discard_range(RAMBlock *rb, uint64_t start, size_t length)
         }
         trace_ram_block_discard_range(rb->idstr, host_startaddr, length,
                                       need_madvise, need_fallocate, ret);
+#endif /* _WIN32 */
     } else {
         error_report("ram_block_discard_range: Overrun block '%s' (%" PRIu64
                      "/%zx/" RAM_ADDR_FMT")",

@@ -80,6 +80,7 @@ void qemu_ram_set_uf_zeroable(RAMBlock *rb);
 
 size_t qemu_ram_pagesize(RAMBlock *block);
 size_t qemu_ram_pagesize_largest(void);
+ram_addr_t qemu_ram_get_used_length(RAMBlock *rb);
 
 void cpu_physical_memory_rw(hwaddr addr, uint8_t *buf,
                             int len, int is_write);
