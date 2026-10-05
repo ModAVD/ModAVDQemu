@@ -44,6 +44,14 @@ public:
     void Send(const absl::LogEntry& entry) override;
 
     /**
+     * @brief Flushes the output stream.
+     *
+     * Abseil calls this through absl::FlushLogSinks() before it aborts on a
+     * FATAL message.
+     */
+    void Flush() override;
+
+    /**
      * @brief Ansi color used for a given severity.
      *
      * Note this can be empty if useColor is false.

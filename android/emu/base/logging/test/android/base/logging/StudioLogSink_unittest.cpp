@@ -70,4 +70,38 @@ TEST_F(LogSinkTest, LogsFatal) {
     // Note: EXPECT_DEATH on windows captures additional data, as long as we see FATAL and Goodbye
     EXPECT_DEATH(EXIT_WITH_FATAL_MESSAGE("%s", "Goodbye!"), ".*FATAL.*Goodbye!.*");
 }
+
+namespace {
+// Records how often the stream was flushed and how much had been written by
+// the last flush.
+class FlushCountingBuf : public std::stringbuf {
+public:
+    int syncs = 0;
+    size_t bytesAtLastSync = 0;
+
+protected:
+    int sync() override {
+        ++syncs;
+        bytesAtLastSync = str().size();
+        return std::stringbuf::sync();
+    }
+};
+}  // namespace
+
+TEST_F(LogSinkTest, FlushesEachLine) {
+    FlushCountingBuf buf;
+    std::ostream out(&buf);
+    studio_sink()->SetOutputStream(&out);
+
+    USER_MESSAGE(INFO) << "first";
+    EXPECT_EQ(buf.syncs, 1);
+    EXPECT_EQ(buf.bytesAtLastSync, buf.str().size());
+
+    USER_MESSAGE(WARNING) << "second";
+    EXPECT_EQ(buf.syncs, 2);
+    EXPECT_EQ(buf.bytesAtLastSync, buf.str().size());
+
+    // |out| goes away at the end of this scope.
+    studio_sink()->SetOutputStream(&std::cout);
+}
 }  // namespace android::base

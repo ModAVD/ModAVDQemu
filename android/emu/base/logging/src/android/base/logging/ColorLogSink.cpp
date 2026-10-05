@@ -101,6 +101,20 @@ void ColorLogSink::Send(const absl::LogEntry& entry) {
     }
 
     *mOutputStream << line;
+
+    // Push the line out now. On Windows stdout/stderr are fully buffered
+    // (see os_set_line_buffering() in os-win32.c), so without this the most
+    // recent lines sit in the CRT buffer until 4 KiB have accumulated. When
+    // the process then dies through abort() or a crash handler, neither of
+    // which flushes stdio, those lines are lost, including the FATAL message
+    // that explains the abort. The line was built as one string above, so
+    // this is still a single write per line and does not bring back the
+    // fragmentation that the buffering was introduced to avoid.
+    mOutputStream->flush();
+}
+
+void ColorLogSink::Flush() {
+    mOutputStream->flush();
 }
 
 std::string_view ColorLogSink::Color(absl::LogSeverity severity) const {
