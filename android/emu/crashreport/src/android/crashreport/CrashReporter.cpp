@@ -57,8 +57,11 @@ namespace android {
 namespace crashreport {
 
 const constexpr char kCrashOnExitFileName[] = "crash-on-exit";
+// MAS: a database of our own. Official builds of the same version use
+// "emu-crash-<version>.db" and delete every report they have no upload
+// consent for when they start, which would take our minidumps with them.
 const constexpr char kCrashpadDatabase[] =
-        "emu-crash-" EMULATOR_VERSION_STRING_SHORT ".db";
+        "emu-crash-" EMULATOR_VERSION_STRING_SHORT "-mas.db";
 
 using DefaultStringAnnotation = crashpad::StringAnnotation<1024>;
 LazyInstance<CrashReporter> sCrashReporter = LAZY_INSTANCE_INIT;
