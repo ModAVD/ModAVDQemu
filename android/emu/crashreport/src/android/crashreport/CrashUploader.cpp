@@ -154,6 +154,12 @@ static UploadResult UploadReport(
 
 UploadResult ProcessPendingReport(CrashReportDatabase* database_,
                                   const CrashReportDatabase::Report& report) {
+    // MAS: this build never uploads crash reports. Refuse before touching the
+    // report or the network, so the report stays in the database as it is.
+    printf("Not uploading crash report %s: this build never uploads crash "
+           "reports.\n",
+           report.uuid.ToString().c_str());
+    return UploadResult::kPermanentFailure;
 #ifdef __APPLE__
     crashpad::RecordFileLimitAnnotation();
 #endif

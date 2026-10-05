@@ -324,6 +324,13 @@ static bool DeleteCrashReports(
 
 static bool UploadCrashReports(
         std::shared_ptr<CrashReportDatabase> crashDatabase) {
+    // MAS: this build never uploads crash reports. Leave the database alone
+    // (no upload request is recorded) and point at the local files instead.
+    fprintf(stderr,
+            "This build never uploads crash reports. Use -l to list the "
+            "local minidumps.\n");
+    return false;
+
     std::vector<crashpad::CrashReportDatabase::Report> pendingReports;
     std::vector<crashpad::CrashReportDatabase::Report> reports;
 
