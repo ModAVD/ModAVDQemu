@@ -154,36 +154,36 @@ const char *error_get_progname(void)
 }
 
 /*
- * Print current location to current monitor if we have one, else to stderr.
+ * Append the current location to @msg.
  */
-static void print_loc(void)
+static void print_loc(GString *msg)
 {
     const char *sep = "";
     int i;
     const char *const *argp;
 
     if (!cur_mon && progname) {
-        fprintf(stderr, "%s:", progname);
+        g_string_append_printf(msg, "%s:", progname);
         sep = " ";
     }
     switch (cur_loc->kind) {
     case LOC_CMDLINE:
         argp = cur_loc->ptr;
         for (i = 0; i < cur_loc->num; i++) {
-            error_printf("%s%s", sep, argp[i]);
+            g_string_append_printf(msg, "%s%s", sep, argp[i]);
             sep = " ";
         }
-        error_printf(": ");
+        g_string_append(msg, ": ");
         break;
     case LOC_FILE:
-        error_printf("%s:", (const char *)cur_loc->ptr);
+        g_string_append_printf(msg, "%s:", (const char *)cur_loc->ptr);
         if (cur_loc->num) {
-            error_printf("%d:", cur_loc->num);
+            g_string_append_printf(msg, "%d:", cur_loc->num);
         }
-        error_printf(" ");
+        g_string_append(msg, " ");
         break;
     default:
-        error_printf("%s", sep);
+        g_string_append(msg, sep);
     }
 }
 
@@ -200,29 +200,39 @@ static void vreport(report_type type, const char *fmt, va_list ap)
 {
     GTimeVal tv;
     gchar *timestr;
+    GString *msg = g_string_new(NULL);
 
     if (enable_timestamp_msg && !cur_mon) {
         g_get_current_time(&tv);
         timestr = g_time_val_to_iso8601(&tv);
-        error_printf("%s ", timestr);
+        g_string_append_printf(msg, "%s ", timestr);
         g_free(timestr);
     }
 
-    print_loc();
+    print_loc(msg);
 
     switch (type) {
     case REPORT_TYPE_ERROR:
         break;
     case REPORT_TYPE_WARNING:
-        error_printf("warning: ");
+        g_string_append(msg, "warning: ");
         break;
     case REPORT_TYPE_INFO:
-        error_printf("info: ");
+        g_string_append(msg, "info: ");
         break;
     }
 
-    error_vprintf(fmt, ap);
-    error_printf("\n");
+    g_string_append_vprintf(msg, fmt, ap);
+    g_string_append(msg, "\n");
+
+    /*
+     * Hand the whole line over in one call. Not every host can line
+     * buffer stderr (the Windows CRT cannot), and a line printed piece by
+     * piece may reach the reader in several writes, or interleaved with
+     * output from other threads.
+     */
+    error_printf("%s", msg->str);
+    g_string_free(msg, true);
 }
 
 /*
