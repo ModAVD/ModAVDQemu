@@ -102,7 +102,7 @@ void ColorLogSink::Send(const absl::LogEntry& entry) {
 
     *mOutputStream << line;
 
-    // Push the line out now. On Windows stdout/stderr are fully buffered
+    // Push the line out now. On Windows stdout is fully buffered
     // (see os_set_line_buffering() in os-win32.c), so without this the most
     // recent lines sit in the CRT buffer until 4 KiB have accumulated. When
     // the process then dies through abort() or a crash handler, neither of
