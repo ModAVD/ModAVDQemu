@@ -65,16 +65,13 @@ static const char kNewerVersionMessage[] =
 )";
 
 void android_checkForUpdates(const char* coreVersion) {
-    auto checker =
-            std::make_unique<android::update_check::SystemClockUpdateChecker>(
-                    coreVersion);
-
-    if (checker->runAsyncCheck()) {
-        // checker will delete itself after the check in the worker thread
-        checker.release();
-    } else {
-        VERBOSE_PRINT(updater, "UpdateChecker: skipped version check");
-    }
+    // MAS local: never check for updates. Upstream starts a
+    // SystemClockUpdateChecker here, which at most every 4 hours per version
+    // fetches kVersionUrl with the installation id, OS and emulator version.
+    // Upgrades of this build come from whoever distributed it.
+    (void)coreVersion;
+    dinfo("Update check skipped: this build never checks for updates; "
+          "upgrades come from whoever distributed it.");
 }
 
 namespace android {
@@ -112,25 +109,10 @@ public:
     }
 
     virtual std::string load() override {
-        std::string xml;
-        std::string url(kVersionUrl);
-        if (!mCoreVersion.empty()) {
-            const auto& id = android::studio::getInstallationId();
-            url += Uri::FormatEncodeArguments(
-                    "?tool=emulator&uid=%s&os=%s&osa=%s&", id,
-                    toString(System::get()->getOsType()),
-                    toOsArchString(System::get()->getHostBitness()));
-            // append the fields which may change from run to run: version and
-            // core version
-            url += getVersionUriFields();
-        }
-        char* error = nullptr;
-        if (!curl_download(url.c_str(), nullptr, &curlWriteCallback, &xml,
-                           &error)) {
-            dwarning("UpdateCheck: Failure: %s", error);
-            ::free(error);
-        }
-        return xml;
+        // MAS local: never fetch kVersionUrl. Besides the startup check
+        // above, the Help page of the extended controls asks for the latest
+        // version through here; with nothing loaded it shows "Unavailable".
+        return {};
     }
 
     virtual std::string getUniqueDataKey() override {
