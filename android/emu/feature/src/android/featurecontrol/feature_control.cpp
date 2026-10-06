@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "android/utils/debug.h"
 #include "host-common/FeatureControl.h"
 #include "host-common/Features.h"
 
@@ -59,7 +60,13 @@ void feature_reset_enabled_to_default(Feature feature) {
 
 void feature_update_from_server() {
     android::featurecontrol::applyCachedServerFeaturePatterns();
-    android::featurecontrol::asyncUpdateServerFeaturePatterns();
+    // MAS local: never download feature patterns. Upstream calls
+    // asyncUpdateServerFeaturePatterns() here, which at most once a day
+    // fetches emulator-feature-flags.protobuf from dl.google.com into the
+    // cache that the line above reads at the next start. The cached (or
+    // shipped) patterns are still applied as before.
+    dinfo("Feature patterns are not downloaded: this build never fetches "
+          "them and keeps using the cached or shipped ones.");
 }
 
 const char* feature_name(Feature feature) {
