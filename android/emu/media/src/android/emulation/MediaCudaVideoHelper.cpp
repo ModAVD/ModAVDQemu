@@ -361,7 +361,8 @@ int MediaCudaVideoHelper::HandlePictureDisplay(CUVIDPARSERDISPINFO* pDispInfo) {
     NVDEC_API_CALL(cuCtxPushCurrent(mCudaContext));
     unsigned int newOutBufferSize = mOutputWidth * mOutputHeight * 3 / 2;
     std::vector<uint8_t> myFrame;
-    TextureFrame texFrame;
+    // Stays {0, 0} in byte-buffer mode; consumers treat 0 as "no texture".
+    TextureFrame texFrame{0, 0};
     if (mUseGpuTexture && mTexturePool != nullptr) {
         media_cuda_utils_copy_context my_copy_context{
                 .src_frame = dpSrcFrame,

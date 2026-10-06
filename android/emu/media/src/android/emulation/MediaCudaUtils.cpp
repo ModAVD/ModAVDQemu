@@ -13,10 +13,12 @@
 // limitations under the License.
 
 #include "host-common/MediaCudaUtils.h"
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
 #include "android/main-emugl.h"
+#include "android/utils/debug.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN 1
@@ -58,6 +60,16 @@ extern "C" {
 #define MEDIA_CUDA_COPY_Y_TEXTURE 1
 #define MEDIA_CUDA_COPY_UV_TEXTURE 2
 
+// The copy runs for every decoded frame, so only report the first failure.
+static void media_cuda_warn_once(const char* call, CUresult res) {
+    static std::atomic<bool> s_warned{false};
+    if (!s_warned.exchange(true)) {
+        dwarning("cuda: %s failed with error %d; decoded frames will not be "
+                 "copied to the output texture",
+                 call, (int)res);
+    }
+}
+
 static void media_cuda_copy_decoded_frame(void* privData,
                                           int mode,
                                           uint32_t dest_texture_handle) {
@@ -66,15 +78,33 @@ static void media_cuda_copy_decoded_frame(void* privData,
 
     const unsigned int GL_TEXTURE_2D = 0x0DE1;
     const unsigned int cudaGraphicsMapFlagsNone = 0x0;
-    CUgraphicsResource CudaRes{0};
+    CUgraphicsResource CudaRes = nullptr;
     CUVID_DPRINT("cuda copy decoded frame testure %d",
                  (int)dest_texture_handle);
-    NVDEC_API_CALL(cuGraphicsGLRegisterImage(&CudaRes, dest_texture_handle,
-                                             GL_TEXTURE_2D, 0x0));
-    CUarray texture_ptr;
-    NVDEC_API_CALL(cuGraphicsMapResources(1, &CudaRes, 0));
-    NVDEC_API_CALL(
-            cuGraphicsSubResourceGetMappedArray(&texture_ptr, CudaRes, 0, 0));
+    CUresult res = cuGraphicsGLRegisterImage(&CudaRes, dest_texture_handle,
+                                             GL_TEXTURE_2D,
+                                             cudaGraphicsMapFlagsNone);
+    if (res != CUDA_SUCCESS) {
+        // Nothing was registered, so there is nothing to map, copy into or
+        // unregister. Carrying on would hand cuMemcpy2D() an uninitialized
+        // CUarray.
+        media_cuda_warn_once("cuGraphicsGLRegisterImage", res);
+        return;
+    }
+    res = cuGraphicsMapResources(1, &CudaRes, 0);
+    if (res != CUDA_SUCCESS) {
+        media_cuda_warn_once("cuGraphicsMapResources", res);
+        NVDEC_API_CALL(cuGraphicsUnregisterResource(CudaRes));
+        return;
+    }
+    CUarray texture_ptr = nullptr;
+    res = cuGraphicsSubResourceGetMappedArray(&texture_ptr, CudaRes, 0, 0);
+    if (res != CUDA_SUCCESS || texture_ptr == nullptr) {
+        media_cuda_warn_once("cuGraphicsSubResourceGetMappedArray", res);
+        NVDEC_API_CALL(cuGraphicsUnmapResources(1, &CudaRes, 0));
+        NVDEC_API_CALL(cuGraphicsUnregisterResource(CudaRes));
+        return;
+    }
     CUdeviceptr dpSrcFrame = copy_context->src_frame;
     CUDA_MEMCPY2D m = {0};
     m.srcMemoryType = CU_MEMORYTYPE_DEVICE;
