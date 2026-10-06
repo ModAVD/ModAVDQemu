@@ -120,8 +120,21 @@ char *os_find_datadir(void)
 
 void os_set_line_buffering(void)
 {
+    /* The Windows CRT has no line buffering; _IOLBF means _IOFBF. */
     setvbuf(stdout, NULL, _IOFBF, 4096);
-    setvbuf(stderr, NULL, _IOFBF, 4096);
+
+    /*
+     * Leave stderr as the CRT sets it up. A stderr without a buffer of its
+     * own gets a temporary buffer for the duration of each stdio call,
+     * which is flushed before the call returns: every fprintf(), fputs()
+     * or fwrite() becomes one write, and nothing is held back.
+     *
+     * Any setvbuf() call on stderr is worse. _IONBF turns the temporary
+     * buffer off and writes one byte at a time. _IOFBF keeps up to 4 KiB
+     * of error output in memory: it shows up late, and is lost when the
+     * process aborts or crashes, because neither abort() nor the crash
+     * handler flushes stdio.
+     */
 }
 
 /*

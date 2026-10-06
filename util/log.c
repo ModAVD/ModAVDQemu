@@ -86,8 +86,14 @@ void qemu_set_log(int log_flags)
             setvbuf(qemu_logfile, logfile_buf, _IOLBF, sizeof(logfile_buf));
         } else {
 #if defined(_WIN32)
-            /* Win32 doesn't support line-buffering, so use unbuffered output. */
-            setvbuf(qemu_logfile, NULL, _IONBF, 0);
+            /*
+             * Win32 doesn't support line-buffering, so use unbuffered
+             * output. stderr already writes once per call when left
+             * alone, see os_set_line_buffering().
+             */
+            if (qemu_logfile != stderr) {
+                setvbuf(qemu_logfile, NULL, _IONBF, 0);
+            }
 #else
             setvbuf(qemu_logfile, NULL, _IOLBF, 0);
 #endif
