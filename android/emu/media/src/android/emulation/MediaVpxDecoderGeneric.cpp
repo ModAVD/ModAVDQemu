@@ -359,6 +359,22 @@ void MediaVpxDecoderGeneric::flush(void* ptr) {
 
 void MediaVpxDecoderGeneric::destroyVpxContext(void* ptr) {
     VPX_DPRINT("calling destroy context");
+    // Frames decoded to GPU textures that the guest has not fetched yet still
+    // hold a Y/UV texture pair from the pool. Hand the pairs back, as the
+    // H.264 and HEVC decoders do, so that the pool deletes them; dropping the
+    // frames would leak the textures. Frames decoded in software carry no
+    // texture names.
+    while (MediaSnapshotState::FrameInfo* pFrame =
+                   mSnapshotHelper.frontFrame()) {
+        if (pFrame->texture.size() >= 2 && pFrame->texture[0] > 0 &&
+            pFrame->texture[1] > 0) {
+            mRenderer.putTextureFrame(
+                    TextureFrame{pFrame->texture[0], pFrame->texture[1]});
+        }
+        mSnapshotHelper.discardFrontFrame();
+    }
+    mRenderer.cleanUpTextures();
+
     if (mVideoHelper != nullptr) {
         mVideoHelper->deInit();
         mVideoHelper.reset(nullptr);
