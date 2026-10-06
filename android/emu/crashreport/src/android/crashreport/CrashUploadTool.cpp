@@ -91,12 +91,6 @@ using google_breakpad::MinidumpThreadList;
 using google_breakpad::ProcessState;
 using google_breakpad::SimpleSymbolSupplier;
 
-#ifdef NDEBUG
-#define CRASHURL "https://clients2.google.com/cr/report"
-#else
-#define CRASHURL "https://clients2.google.com/cr/staging_report"
-#endif
-
 #ifdef _WIN32
 #define standard_out std::wcout
 #define standard_err std::wcerr
@@ -241,7 +235,8 @@ static void Usage(int argc, const char* argv[], bool error) {
     fprintf(error ? stderr : stdout,
             "Usage: %s [options] \n"
             "\n"
-            "List, upload and examine emulator related crashdumps.\n"
+            "List and examine emulator related crashdumps. They stay on this\n"
+            "machine: this build never uploads crash reports.\n"
             "The database can be found here:\n",
             argv[0]);
 
@@ -257,9 +252,6 @@ static void Usage(int argc, const char* argv[], bool error) {
             "\n"
             "  -l                                      List local crash "
             "reports\n"
-            "  -u                                      Upload local "
-            "crash report(s) to " CRASHURL
-            "\n"
             "  -e                                      Erase local crash "
             "report(s)\n"
             "  -d  <minidump-file> [symbol-path ...]   Process the given "
