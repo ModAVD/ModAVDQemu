@@ -67,7 +67,24 @@ MediaCudaVideoHelper::~MediaCudaVideoHelper() {
 void MediaCudaVideoHelper::deInit() {
     CUDA_DPRINT("deInit calling");
 
-    mSavedDecodedFrames.clear();
+    {
+        std::lock_guard<std::mutex> g(mFrameLock);
+        // Frames that were decoded but never fetched by the guest still hold
+        // a pair of textures taken from the pool. Nothing else references
+        // them, so dropping the frames would leak the textures until the
+        // whole GL share group goes away. Hand them back so the pool frees
+        // them in its next cleanUpTextures().
+        if (mTexturePool != nullptr) {
+            for (const auto& frame : mSavedDecodedFrames) {
+                if (frame.texture.size() >= 2 && frame.texture[0] > 0 &&
+                    frame.texture[1] > 0) {
+                    mTexturePool->putTextureFrame(
+                            TextureFrame{frame.texture[0], frame.texture[1]});
+                }
+            }
+        }
+        mSavedDecodedFrames.clear();
+    }
     if (mCudaContext != nullptr) {
         NVDEC_API_CALL(cuCtxPushCurrent(mCudaContext));
         if (mCudaParser != nullptr) {
