@@ -219,7 +219,7 @@ OPT_FLAG(wait_for_debugger, "Pause on launch and wait for a debugger process to 
 OPT_FLAG(skip_adb_auth, "Skip adb authentication dialogue")
 
 OPT_FLAG(metrics_to_console, "Enable usage metrics and print the messages to stdout")
-OPT_FLAG(metrics_collection, "Enable usage metrics and send them to google play")
+OPT_FLAG(metrics_collection, "Ignored: this build never uploads usage metrics or crash reports")
 OPT_PARAM(metrics_to_file, "<file>", "Enable usage metrics and write the messages into specified file")
 OPT_FLAG(no_metrics, "Disable metrics collection")
 OPT_FLAG(detect_image_hang, "Enable the detection of system image hangs.")
@@ -381,8 +381,8 @@ OPT_PARAM(fishtank, "<discovery_file>", "The fishtank ui for emulator <discovery
 
 OPT_PARAM(crash_report_mode,
           "<option list>",
-          "Override crash reporting mode. Available options: disabled, never, "
-          "always, ask")
+          "Crash reports stay on this machine, never uploaded. Options: "
+          "disabled (off); never, always, ask (no effect)")
 
 OPT_FLAG (no_display_layout, "Disable display layout from the environment configuration." )
 

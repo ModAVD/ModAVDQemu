@@ -1974,8 +1974,10 @@ static void
 help_metrics_collection(stralloc_t* out)
 {
     PRINTF(
-    "  Help make the emulator better by sending usage statistics\n"
-    "  and crash reports to Google upon (graceful) emulator exit.\n"
+    "  Accepted for compatibility only: this build never sends usage\n"
+    "  statistics or crash reports anywhere, and with this flag it behaves\n"
+    "  like \"-no-metrics\". Crash reports stay on this machine, see\n"
+    "  \"-help-crash-report-mode\".\n"
     "  Mutually exclusive with \"-metrics-to-file <file>\" and \"-metrics-to-console\".\n\n"
     );
 }
@@ -2313,7 +2315,14 @@ static void help_display_modality(stralloc_t* out){
 
 static void help_crash_report_mode(stralloc_t* out) {
     PRINTF("  Override crash reporting mode. Available options: disabled, "
-           "never, always, ask\n");
+           "never, always, ask\n\n"
+           "  This build never uploads crash reports and never asks about\n"
+           "  it. Crash dumps are kept in a local database (by default\n"
+           "  emu-crash-<version>-mas.db in the AndroidEmulator temporary\n"
+           "  directory, or ANDROID_EMU_CRASH_REPORTING_DATABASE); the newest\n"
+           "  5 are kept (ANDROID_EMU_CRASH_REPORTS_TO_KEEP, 1 to 100).\n"
+           "  \"disabled\" turns crash reporting off altogether; \"never\",\n"
+           "  \"always\" and \"ask\" are accepted and change nothing.\n");
 }
 
 static void help_no_display_layout(stralloc_t* out) {
