@@ -231,7 +231,9 @@ void MediaH264DecoderGeneric::destroyH264Context() {
         if (!pFrame) {
             break;
         }
-        if (mUseGpuTexture && pFrame->texture[0] > 0 &&
+        // Look at the frame, not at mUseGpuTexture: frames decoded to
+        // textures before try_decode() switched to FFmpeg still hold a pair.
+        if (pFrame->texture.size() >= 2 && pFrame->texture[0] > 0 &&
             pFrame->texture[1] > 0) {
             mRenderer.putTextureFrame(
                     TextureFrame{pFrame->texture[0], pFrame->texture[1]});
@@ -378,7 +380,9 @@ void MediaH264DecoderGeneric::getImage(void* ptr) {
 
     bool needToCopyToGuest = true;
     if (mParser.version() == 200) {
-        if (mUseGpuTexture && pFrame->texture[0] > 0 &&
+        // A frame decoded to textures has no bytes, even when try_decode()
+        // has since switched to FFmpeg and turned mUseGpuTexture off.
+        if (pFrame->texture.size() >= 2 && pFrame->texture[0] > 0 &&
             pFrame->texture[1] > 0) {
             H264_DPRINT(
                     "calling rendering to host side color buffer with id %d "
