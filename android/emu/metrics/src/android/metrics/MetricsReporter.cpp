@@ -29,7 +29,6 @@
 #include "android/metrics/MetricsLogging.h"          // for D
 #include "android/metrics/MetricsPaths.h"            // for getSpoolDirectory
 #include "android/metrics/NullMetricsReporter.h"     // for NullMetricsRep...
-#include "android/metrics/PlaystoreMetricsWriter.h"  // for PlaystoreMetri...
 #include "android/metrics/StudioConfig.h"            // for getAnonymizati...
 #include "android/metrics/TextMetricsWriter.h"       // for TextMetricsWriter
 #include "android/utils/debug.h"                     // for dwarning
@@ -103,9 +102,13 @@ void MetricsReporter::start(const std::string& sessionId,
 
     } else if (getConsoleAgents()
             ->settings->android_cmdLineOptions()->metrics_collection) {
-        D("Writing metrics to play store");
-        writer = PlaystoreMetricsWriter::create(sessionId,
-                base::pj(getSpoolDirectory(), "backoff_cookie.proto"));
+        // MAS local: never send usage metrics. Upstream creates a
+        // PlaystoreMetricsWriter here, which posts the collected events to
+        // https://play.googleapis.com/log when the emulator exits. Treat the
+        // flag like -no-metrics instead; -metrics-to-console and
+        // -metrics-to-file still write the metrics locally.
+        dinfo("Usage metrics are not uploaded: this build never sends them, "
+              "so -metrics-collection is ignored.");
 
     } else if (getConsoleAgents()
             ->settings->android_cmdLineOptions()->metrics_to_file != nullptr) {
