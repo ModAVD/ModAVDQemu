@@ -504,6 +504,13 @@ void MediaHevcDecoderGeneric::oneShotDecode(const uint8_t* data,
         if (!success) {
             break;
         }
+        // The frame is dropped. If it was decoded to GPU textures, its pair
+        // came from the pool; hand it back, or the textures leak.
+        if (frame.texture.size() >= 2 && frame.texture[0] > 0 &&
+            frame.texture[1] > 0) {
+            mRenderer.putTextureFrame(
+                    TextureFrame{frame.texture[0], frame.texture[1]});
+        }
     }
 }
 
