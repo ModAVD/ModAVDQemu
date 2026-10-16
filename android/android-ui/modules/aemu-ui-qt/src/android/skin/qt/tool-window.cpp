@@ -207,8 +207,10 @@ namespace fc = android::featurecontrol;
 namespace xr_service = android::xr::xr_service;
 
 // Instances here run unattended for automation, so the side toolbar keeps only
-// power, volume and the three navigation keys. ANDROID_EMU_FULL_TOOLBAR=1 shows
-// the full toolbar again.
+// power, volume, back and home. No overview: the images run without the Pixel
+// launcher, which is what provides Recents, so the key did nothing and testers
+// took it for broken (10-16). ANDROID_EMU_FULL_TOOLBAR=1 shows the full
+// toolbar again.
 static bool leanToolbar() {
     static const bool lean =
             System::get()->getEnvironmentVariable("ANDROID_EMU_FULL_TOOLBAR") !=
@@ -666,7 +668,6 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
                 mToolsUi->power_button,       mToolsUi->volume_up_button,
                 mToolsUi->volume_down_button, mToolsUi->back_button,
                 mToolsUi->home_button,        mToolsUi->all_apps_button,
-                mToolsUi->overview_button,
         };
         for (QPushButton* button : findChildren<QPushButton*>()) {
             if (std::find(std::begin(keep), std::end(keep), button) ==
