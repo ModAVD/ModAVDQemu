@@ -16,6 +16,9 @@
 #include "aemu/base/files/PathUtils.h"
 #include "aemu/base/memory/ScopedPtr.h"
 #include "aemu/base/system/Win32Utils.h"
+#ifdef _WIN32
+#include "aemu/base/system/Win32UnicodeString.h"
+#endif
 #include "aemu/base/threads/Async.h"
 #include "aemu/base/threads/Thread.h"
 #include "android-qemu2-glue/base/files/KernelCmdLineLoader.h"
@@ -529,6 +532,25 @@ static void replaceDefaultPath(AvdInfo* avd,
     defaultPath.swap(strProposed);
 }
 
+#ifdef _WIN32
+// MAS local: whether the volume holding |dir| supports sparse files (NTFS and
+// ReFS do; FAT32 and exFAT do not, and there the raw ext4 image is allocated in
+// full while it is built).
+static bool volumeSupportsSparseFiles(const std::string& dir) {
+    Win32UnicodeString wdir(dir);
+    wchar_t volume[MAX_PATH + 1] = {};
+    if (!GetVolumePathNameW(wdir.c_str(), volume, MAX_PATH + 1)) {
+        return false;
+    }
+    DWORD flags = 0;
+    if (!GetVolumeInformationW(volume, nullptr, 0, nullptr, nullptr, &flags,
+                               nullptr, 0)) {
+        return false;
+    }
+    return (flags & FILE_SUPPORTS_SPARSE_FILES) != 0;
+}
+#endif
+
 static void convertExt4ToQcow2(std::string ext4filepath) {
     if (!path_exists(ext4filepath.c_str())) {
         return;
@@ -543,9 +565,27 @@ static void convertExt4ToQcow2(std::string ext4filepath) {
     auto startTime = std::chrono::steady_clock::now();
     auto qemu_img = System::get()->findBundledExecutable("qemu-img");
     std::string dataimageqcow2 = dataimageext4 + std::string(".tmp.qcow2");
-    auto res = System::get()->runCommandWithResult({qemu_img, "convert", "-O",
-                                                    "qcow2", dataimageext4,
-                                                    dataimageqcow2});
+    // MAS local: read the ext4 image with "-T none" (no host cache). The image
+    // is sparse (libsparse marks it so on Windows); a cached read of a sparse
+    // file with data in it makes Windows reserve free space for its whole
+    // logical size until the file is deleted, so creating a 64 GB data
+    // partition briefly needed 64 GB free (measured 10-16: a 16 GB image took
+    // 16.4 GB during the conversion; with -T none, 3 MB). If the uncached
+    // conversion fails, fall back to the original cached one.
+    System::ProcessExitCode exitCode = -1;
+    auto res = System::get()->runCommandWithResult(
+            {qemu_img, "convert", "-T", "none", "-O", "qcow2", dataimageext4,
+             dataimageqcow2},
+            System::kInfinite, &exitCode);
+    if (!res || exitCode != 0 || !System::get()->pathIsQcow2(dataimageqcow2)) {
+        dwarning("uncached conversion of %s failed (exit code %d), retrying "
+                 "with the host cache",
+                 dataimageext4.c_str(), (int)exitCode);
+        path_delete_file(dataimageqcow2.c_str());
+        res = System::get()->runCommandWithResult({qemu_img, "convert", "-O",
+                                                   "qcow2", dataimageext4,
+                                                   dataimageqcow2});
+    }
     if (!System::get()->pathIsQcow2(dataimageqcow2)) {
         dprint("%s is not qcow2\n", dataimageqcow2);
         return;
@@ -2572,6 +2612,20 @@ extern "C" int main(int argc, char** argv) {
                                         ->settings->hw()
                                         ->disk_dataPartition_size /
                                 (1024.0 * 1024.0);
+#ifdef _WIN32
+                // MAS local: the data partition is a qcow2 that grows with
+                // what the guest writes, and on a volume with sparse files
+                // building it no longer needs room for the whole size (see
+                // convertExt4ToQcow2: measured 10-16, 141 MB of ext4 metadata
+                // for a 16 GB partition). 1.2 x the size (77 GB for the
+                // 64 GB default) turned testers away; ask for 10 GB there.
+                // Running out of space later is the launcher's to warn about.
+                constexpr double kSparseVolumeNeededMb = 10 * 1024.0;
+                if (needed > kSparseVolumeNeededMb &&
+                    volumeSupportsSparseFiles(*dataPartitionPathAsDir)) {
+                    needed = kSparseVolumeNeededMb;
+                }
+#endif
 
                 double available = (double)availableSpace / (1024.0 * 1024.0);
 
