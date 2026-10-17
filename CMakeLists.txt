@@ -1015,6 +1015,13 @@ if(NOT OPTION_AEMU_LIBS_ONLY)
       x86_64 "${ANDROID_QEMU_i386_DEVICES_${ANDROID_TARGET_TAG}}")
     android_add_qemu_headless_executable(
       x86_64 "${ANDROID_QEMU_i386_DEVICES_${ANDROID_TARGET_TAG}}")
+    # MAS local: the x86_64 binaries carry the program icon as well.
+    if(WIN32)
+      add_resource(TARGET qemu-system-x86_64
+                   RESOURCE android/images/emulator_icon.rc)
+      target_sources(qemu-system-x86_64-headless
+                     PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/emulator_icon.res)
+    endif()
   endif()
   android_add_qemu_executable(
     aarch64 "${ANDROID_QEMU_arm_DEVICES_${ANDROID_TARGET_TAG}}")
