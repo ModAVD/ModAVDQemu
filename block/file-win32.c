@@ -70,14 +70,15 @@ typedef struct BDRVRawState {
 } BDRVRawState;
 
 /*
- * MAS: a guest request usually arrives with one iovec per guest page (256 of
- * them for 1 MiB), and one WriteFile/ReadFile per element made large
- * transfers about twice as slow as on other Windows emulators. Requests with
- * more than one element up to this size go through a single bounce buffer
- * instead; larger ones, or when the buffer cannot be allocated, keep the
- * per-element loop.
+ * MAS: a guest request usually arrives with one iovec per guest page, and the
+ * per-element loop below issues one WriteFile/ReadFile per element. Small
+ * multi-element requests (up to this size) go through a single bounce buffer
+ * instead: a 16 KiB fsync'd guest write then costs one call, not four, and in
+ * the guest such writes got 10-20% faster. Larger ones keep the loop: for
+ * 1 MiB the copy cost more than it saved (1 MiB guest writes got 15-20%
+ * slower with a 64 MiB limit).
  */
-#define RAW_WIN32_BOUNCE_MAX (64 * 1024 * 1024)
+#define RAW_WIN32_BOUNCE_MAX (64 * 1024)
 
 static size_t handle_aiocb_rw_bounce(RawWin32AIOData *aiocb, void *buf)
 {
