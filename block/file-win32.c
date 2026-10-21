@@ -70,6 +70,40 @@ typedef struct BDRVRawState {
 } BDRVRawState;
 
 /*
+ * MAS: a guest request usually arrives with one iovec per guest page (256 of
+ * them for 1 MiB), and one WriteFile/ReadFile per element made large
+ * transfers about twice as slow as on other Windows emulators. Requests with
+ * more than one element up to this size go through a single bounce buffer
+ * instead; larger ones, or when the buffer cannot be allocated, keep the
+ * per-element loop.
+ */
+#define RAW_WIN32_BOUNCE_MAX (64 * 1024 * 1024)
+
+static size_t handle_aiocb_rw_bounce(RawWin32AIOData *aiocb, void *buf)
+{
+    OVERLAPPED ov;
+    DWORD ret, ret_count = 0;
+    DWORD len = aiocb->aio_nbytes;
+
+    memset(&ov, 0, sizeof(ov));
+    ov.Offset = aiocb->aio_offset;
+    ov.OffsetHigh = aiocb->aio_offset >> 32;
+    if (aiocb->aio_type & QEMU_AIO_WRITE) {
+        iov_to_buf(aiocb->aio_iov, aiocb->aio_niov, 0, buf, len);
+        ret = WriteFile(aiocb->hfile, buf, len, &ret_count, &ov);
+    } else {
+        ret = ReadFile(aiocb->hfile, buf, len, &ret_count, &ov);
+    }
+    if (!ret) {
+        ret_count = 0;
+    }
+    if (!(aiocb->aio_type & QEMU_AIO_WRITE) && ret_count) {
+        iov_from_buf(aiocb->aio_iov, aiocb->aio_niov, 0, buf, ret_count);
+    }
+    return ret_count;
+}
+
+/*
  * Read/writes the data to/from a given linear buffer.
  *
  * Returns the number of bytes handles or -errno in case of an error. Short
@@ -79,6 +113,15 @@ static size_t handle_aiocb_rw(RawWin32AIOData *aiocb)
 {
     size_t offset = 0;
     int i;
+
+    if (aiocb->aio_niov > 1 && aiocb->aio_nbytes <= RAW_WIN32_BOUNCE_MAX) {
+        void *buf = g_try_malloc(aiocb->aio_nbytes);
+        if (buf) {
+            offset = handle_aiocb_rw_bounce(aiocb, buf);
+            g_free(buf);
+            return offset;
+        }
+    }
 
     for (i = 0; i < aiocb->aio_niov; i++) {
         OVERLAPPED ov;
