@@ -145,24 +145,73 @@ public:
                 // TODO (wdu@) Find the root cause in prebuilt QT library.
                 // Bug: 135141621
                 UINT scancode = (ev->lParam >> 16) & 0x1ff;
+                const UINT nativeScancode = scancode;
+                // In host IME text mode, a key the input method took arrives
+                // as VK_PROCESSKEY; leave it to the input method.
+                EmulatorQtWindow* window = EmulatorQtWindow::getInstance();
+                const bool imeTextMode = window && window->isHostImeTextMode();
+                const bool imeKey = imeTextMode && ev->wParam == VK_PROCESSKEY;
+                // Modifiers before the rename below; Qt reports no
+                // auto-repeats of these.
+                const bool modifier =
+                        ev->wParam == VK_SHIFT || ev->wParam == VK_LSHIFT ||
+                        ev->wParam == VK_RSHIFT || ev->wParam == VK_CONTROL ||
+                        ev->wParam == VK_LCONTROL ||
+                        ev->wParam == VK_RCONTROL || ev->wParam == VK_MENU ||
+                        ev->wParam == VK_LMENU || ev->wParam == VK_RMENU ||
+                        ev->wParam == VK_LWIN || ev->wParam == VK_RWIN ||
+                        ev->wParam == VK_CAPITAL || ev->wParam == VK_NUMLOCK ||
+                        ev->wParam == VK_SCROLL;
                 if (LOWORD(GetKeyState(VK_NUMLOCK)) != 0 &&
-                    skin_keycode_native_is_keypad(scancode)) {
+                    skin_keycode_native_is_keypad(scancode) && !imeKey) {
                     scancode = skin_keycode_native_map_keypad(scancode);
                     ev->wParam = MapVirtualKeyA(scancode, MAPVK_VSC_TO_VK);
                 }
+                bool forwarded = false;
+                bool deferred = false;
                 if (getConsoleAgents()->settings->use_keycode_forwarding()) {
                     if (EmulatorQtWindow::getInstance()->isActiveWindow()) {
-                        NativeKeyboardEventHandler::KeyEvent keyEv;
-                        keyEv.scancode = scancode;
-                        keyEv.eventType = kEventKeyDown;
-                        std::optional<SkinEvent> maybeEvent =
-                                NativeKeyboardEventHandler::getInstance()
-                                        ->handleKeyEvent(keyEv);
-                        if (maybeEvent.has_value()) {
-                            EmulatorQtWindow::getInstance()->queueSkinEvent(
-                                    std::move(maybeEvent.value()));
+                        // With the host IME in play the key event decides
+                        // whether the key still goes to the guest as it is;
+                        // see EmulatorQtWindow::hostImeKeyPress().
+                        deferred = window->hostImeDefersNativeKey(nativeScancode);
+                        if (!deferred) {
+                            NativeKeyboardEventHandler::KeyEvent keyEv;
+                            keyEv.scancode = scancode;
+                            keyEv.eventType = kEventKeyDown;
+                            std::optional<SkinEvent> maybeEvent =
+                                    NativeKeyboardEventHandler::getInstance()
+                                            ->handleKeyEvent(keyEv);
+                            if (maybeEvent.has_value()) {
+                                EmulatorQtWindow::getInstance()
+                                        ->queueSkinEvent(
+                                                std::move(maybeEvent.value()));
+                            }
+                            forwarded = true;
                         }
                     }
+                }
+                // Only keys to the emulator window itself, not to the app's
+                // other windows. Bit 30: the key was down before (an
+                // auto-repeat).
+                if (window && !imeKey &&
+                    ev->hwnd == reinterpret_cast<HWND>(window->hostImeKeyWindow())) {
+                    window->hostImeNativeKeyDown(
+                            nativeScancode, (ev->lParam & (1 << 30)) == 0,
+                            modifier, scancode, forwarded, deferred);
+                }
+            } else if (ev->message == WM_KEYUP || ev->message == WM_SYSKEYUP) {
+                // A key up in any window is up. In text mode the input method
+                // may take it (VK_PROCESSKEY), and Qt drops it; a key pressed
+                // the usual way still has to be released in the guest.
+                EmulatorQtWindow* window = EmulatorQtWindow::getInstance();
+                if (window) {
+                    window->hostImeNativeKeyUp(
+                            (ev->lParam >> 16) & 0x1ff,
+                            window->isHostImeTextMode() &&
+                                    ev->wParam == VK_PROCESSKEY &&
+                                    ev->hwnd == reinterpret_cast<HWND>(
+                                                        window->hostImeKeyWindow()));
                 }
             }
         }

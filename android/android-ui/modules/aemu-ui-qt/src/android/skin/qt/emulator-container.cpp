@@ -368,6 +368,21 @@ void EmulatorContainer::focusOutEvent(QFocusEvent* event) {
     QFrame::focusOutEvent(event);
 }
 
+// The container has the keyboard focus, so it is where the host input method
+// sends its events while the window is in host IME text mode.
+void EmulatorContainer::inputMethodEvent(QInputMethodEvent* event) {
+    if (mEmulatorWindow->isHostImeTextMode()) {
+        mEmulatorWindow->handleInputMethodEvent(event);
+        return;
+    }
+    QScrollArea::inputMethodEvent(event);
+}
+
+QVariant EmulatorContainer::inputMethodQuery(Qt::InputMethodQuery query) const {
+    QVariant value = mEmulatorWindow->hostImeQuery(query);
+    return value.isValid() ? value : QScrollArea::inputMethodQuery(query);
+}
+
 void EmulatorContainer::keyPressEvent(QKeyEvent* event) {
     mEmulatorWindow->keyPressEvent(event);
 }

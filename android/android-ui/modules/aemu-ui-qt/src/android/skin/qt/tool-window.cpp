@@ -1555,6 +1555,13 @@ bool ToolWindow::handleQtKeyEvent(const QKeyEvent& event, QtKeyEventSource sourc
     return h;
 }
 
+bool ToolWindow::isShortcutKey(const QKeyEvent& event) const {
+    // Same key sequence as handleQtKeyEvent() looks up.
+    QKeySequence event_key_sequence(event.key() |
+                                    (event.modifiers() & ~Qt::KeypadModifier));
+    return mShortcutKeyStore.handles(event_key_sequence);
+}
+
 void ToolWindow::reportMouseButtonDown() {
     mVirtualSceneControlWindow.ifExists(
             [&] { mVirtualSceneControlWindow.get()->reportMouseButtonDown(); });

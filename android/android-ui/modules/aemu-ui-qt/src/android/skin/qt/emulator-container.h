@@ -31,6 +31,7 @@
 class EmulatorQtWindow;
 class QCloseEvent;
 class QFocusEvent;
+class QInputMethodEvent;
 class QKeyEvent;
 class QMoveEvent;
 class QObject;
@@ -54,6 +55,8 @@ public:
     bool event(QEvent* e) override;
     void focusInEvent(QFocusEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
+    void inputMethodEvent(QInputMethodEvent* event) override;
+    QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void moveEvent(QMoveEvent* event) override;

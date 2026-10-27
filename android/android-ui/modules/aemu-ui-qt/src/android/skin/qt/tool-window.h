@@ -112,6 +112,8 @@ public:
     }
 
     bool handleQtKeyEvent(const QKeyEvent& event, QtKeyEventSource source);
+    // Whether the shortcut table has |event|; looks only, runs nothing.
+    bool isShortcutKey(const QKeyEvent& event) const;
     void reportMouseButtonDown();
 
     bool isExtendedWindowFocused();

@@ -28,6 +28,7 @@
 #include "android/cpu_accelerator.h"
 #include "android/crashreport/CrashReporter.h"
 #include "android/emu/check/include/android/emulation/compatibility_check.h"
+#include "android/emulation/ModavdImePipe.h"
 #include "android/emulation/compatibility_check.h"
 #include "android/emulation/control/globals_agent.h"
 #include "android/emulation/control/user_event_agent.h"
@@ -56,6 +57,7 @@
 #include "android/skin/qt/extended-pages/telephony-controller.h"
 #include "android/skin/qt/extended-pages/telephony-page.h"
 #include "android/skin/qt/multi-display-widget.h"
+#include "android/skin/qt/native-keyboard-event-handler.h"
 #include "android/skin/qt/qt-keycode.h"
 #include "android/skin/qt/qt-settings.h"
 #include "android/skin/qt/screen-mask.h"
@@ -92,9 +94,12 @@
 #include <QBitmap>
 #include <QCheckBox>
 #include <QCursor>
+#include <QElapsedTimer>
 #include <QFileDialog>
+#include <QFontMetrics>
 #include <QIcon>
 #include <QInputDevice>
+#include <QInputMethod>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
@@ -153,6 +158,7 @@ using android::emulation::ApkInstaller;
 using android::emulation::AvdCompatibility;
 using android::emulation::AvdCompatibilityManager;
 using android::emulation::FilePusher;
+using android::emulation::ModavdImePipe;
 
 namespace {
 
@@ -284,6 +290,74 @@ static SkinEvent createMouseTrackingSkinEvent(SkinEventType eventType) {
     auto event = createSkinEvent(eventType);
     event.u.mouse.display_id = 0;
     return event;
+}
+
+// Host IME text mode: values of android.view.KeyEvent and
+// android.text.InputType.
+constexpr uint32_t kAndroidKeycodeA = 29;  // KEYCODE_A .. KEYCODE_Z = 54
+constexpr uint32_t kAndroidMetaShiftOn = 0x1;
+constexpr uint32_t kAndroidMetaAltOn = 0x2;
+constexpr uint32_t kAndroidMetaCtrlOn = 0x1000;
+constexpr uint32_t kInputTypeMaskClass = 0xf;
+constexpr uint32_t kInputTypeMaskVariation = 0xff0;
+constexpr uint32_t kInputTypeClassText = 0x1;
+constexpr uint32_t kInputTypeClassNumber = 0x2;
+constexpr uint32_t kInputTypeTextVariationPassword = 0x80;
+constexpr uint32_t kInputTypeTextVariationVisiblePassword = 0x90;
+constexpr uint32_t kInputTypeTextVariationWebPassword = 0xe0;
+constexpr uint32_t kInputTypeNumberVariationPassword = 0x10;
+// How long the native event filter's record of a WM_KEYDOWN waits for its key
+// event.
+constexpr qint64 kHostImeNativeKeyMs = 1000;
+constexpr size_t kHostImeMaxNativeKeys = 64;
+
+// The Android keycode a text-mode editing key sends, or 0.
+static uint32_t hostImeEditingKeycode(int key) {
+    switch (key) {
+        case Qt::Key_Backspace:
+            return 67;  // KEYCODE_DEL
+        case Qt::Key_Delete:
+            return 112;  // KEYCODE_FORWARD_DEL
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            return 66;  // KEYCODE_ENTER
+        case Qt::Key_Tab:
+        case Qt::Key_Backtab:  // Shift+Tab
+            return 61;  // KEYCODE_TAB
+        case Qt::Key_Left:
+            return 21;  // KEYCODE_DPAD_LEFT
+        case Qt::Key_Up:
+            return 19;  // KEYCODE_DPAD_UP
+        case Qt::Key_Right:
+            return 22;  // KEYCODE_DPAD_RIGHT
+        case Qt::Key_Down:
+            return 20;  // KEYCODE_DPAD_DOWN
+        case Qt::Key_Home:
+            return 122;  // KEYCODE_MOVE_HOME
+        case Qt::Key_End:
+            return 123;  // KEYCODE_MOVE_END
+        case Qt::Key_PageUp:
+            return 92;  // KEYCODE_PAGE_UP
+        case Qt::Key_PageDown:
+            return 93;  // KEYCODE_PAGE_DOWN
+        default:
+            return 0;
+    }
+}
+
+// Identifies a physical key from press to release; key() and text() can
+// change in between when modifiers do.
+static quint32 hostImeKeyId(const QKeyEvent& event) {
+    return event.nativeScanCode() ? event.nativeScanCode()
+                                  : (0x80000000u | quint32(event.key()));
+}
+
+static qint64 hostImeNowMs() {
+    static QElapsedTimer timer;
+    if (!timer.isValid()) {
+        timer.start();
+    }
+    return timer.elapsed();
 }
 
 }  // namespace
@@ -917,6 +991,24 @@ EmulatorQtWindow::EmulatorQtWindow(QWidget* parent)
         // Enable mouse tracking from the initialization.
         queueSkinEvent(createMouseTrackingSkinEvent(kEventMouseStartTracking));
     }
+
+    // Follow what the guest input method reports. The callback runs on the
+    // thread that holds the VM lock; the destructor removes it before |this|
+    // goes away. The cursor QRect carries the guest's left, top, right and
+    // bottom as they are.
+    mHostImeCallbackId = ModavdImePipe::addStateCallback(
+            [this](const ModavdImePipe::State& state, unsigned changes) {
+                const QRect cursor(QPoint(state.cursorLeft, state.cursorTop),
+                                   QPoint(state.cursorRight, state.cursorBottom));
+                emit runOnUiThread([this, connected = state.connected,
+                                    active = state.active,
+                                    inputType = state.inputType,
+                                    hasCursor = state.hasCursor, cursor,
+                                    changes]() {
+                    onHostImeState(connected, active, inputType, hasCursor,
+                                   cursor, changes);
+                });
+            });
 }
 
 EmulatorQtWindow::Ptr EmulatorQtWindow::getInstancePtr() {
@@ -928,6 +1020,7 @@ EmulatorQtWindow* EmulatorQtWindow::getInstance() {
 }
 
 EmulatorQtWindow::~EmulatorQtWindow() {
+    ModavdImePipe::removeStateCallback(mHostImeCallbackId);
     if (mApkInstallCommand) {
         mApkInstallCommand->cancel();
     }
@@ -965,6 +1058,8 @@ void EmulatorQtWindow::focusOutEvent(QFocusEvent* event) {
         queueSkinEvent(std::move(skin_event));
     }
     mHeldModifiers.clear();
+    // Host IME text mode: releases of held keys may now go elsewhere.
+    mHostImeHeld.clear();
     QFrame::focusOutEvent(event);
 }
 
@@ -1230,6 +1325,12 @@ void EmulatorQtWindow::dropEvent(QDropEvent* event) {
 }
 
 void EmulatorQtWindow::keyPressEvent(QKeyEvent* event) {
+    if (hostImeKeyPress(*event)) {
+        return;
+    }
+    const bool hostImeReleaseNow = mHostImeReleaseAfterPress;
+    mHostImeReleaseAfterPress = false;
+
     if (android::featurecontrol::isEnabled(
                 android::featurecontrol::QtRawKeyboardInput) &&
         event->isAutoRepeat()) {
@@ -1238,9 +1339,18 @@ void EmulatorQtWindow::keyPressEvent(QKeyEvent* event) {
     }
 
     handleKeyEvent(kEventKeyDown, *event);
+    if (hostImeReleaseNow) {
+        hostImeReleaseRawKey({HostImePath::Raw, event->key(),
+                              event->nativeScanCode(),
+                              event->nativeVirtualKey()});
+    }
 }
 
 void EmulatorQtWindow::keyReleaseEvent(QKeyEvent* event) {
+    if (hostImeKeyRelease(*event)) {
+        return;
+    }
+
     if (android::featurecontrol::isEnabled(
                 android::featurecontrol::QtRawKeyboardInput) &&
         event->isAutoRepeat()) {
@@ -2576,6 +2686,8 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
         displayCheckWarnings();
         mFirstShowWindowCall = false;
     }
+
+    hostImeUpdateCursor();
 }
 
 void EmulatorQtWindow::onScreenChanged(QScreen* newScreen) {
@@ -2618,10 +2730,12 @@ void EmulatorQtWindow::showEvent(QShowEvent* event) {
 
 void EmulatorQtWindow::slot_horizontalScrollChanged(int value) {
     simulateScrollBarChanged(value, mContainer.verticalScrollBar()->value());
+    hostImeUpdateCursor();
 }
 
 void EmulatorQtWindow::slot_verticalScrollChanged(int value) {
     simulateScrollBarChanged(mContainer.horizontalScrollBar()->value(), value);
+    hostImeUpdateCursor();
 }
 
 void EmulatorQtWindow::slot_scrollRangeChanged(int min, int max) {
@@ -3171,7 +3285,8 @@ void EmulatorQtWindow::handleKeyEvent(SkinEventType type,
 
     bool sendRawKeyboardInputToGuest = android::featurecontrol::isEnabled(
             android::featurecontrol::QtRawKeyboardInput);
-    if (!mForwardShortcutsToDevice && !mInZoomMode &&
+    // Not in host IME text mode, where Ctrl starts Ctrl+letter keys.
+    if (!mForwardShortcutsToDevice && !mInZoomMode && !mHostImeTextMode &&
         !sendRawKeyboardInputToGuest && event.key() == Qt::Key_Control &&
         (event.modifiers() == Qt::ControlModifier ||
          event.modifiers() == (Qt::ControlModifier | Qt::ShiftModifier))) {
@@ -3277,6 +3392,478 @@ void EmulatorQtWindow::handleKeyEvent(SkinEventType type,
                 queueSkinEvent(std::move(skin_event));
             }
         }
+    }
+}
+
+// Host IME text mode. While the guest input method (ModAVD Host Input) says
+// an editable text field has the focus, the container takes input method
+// events, and keyPressEvent() sends printable text ('C') and editing keys
+// ('K') over the modavd_ime pipe instead of to the guest keyboard. All other
+// keys take the usual path. A key's release, and its auto-repeats, take the
+// path its press took, so switching modes never leaves a key held down.
+
+void EmulatorQtWindow::onHostImeState(bool connected,
+                                      bool active,
+                                      uint32_t inputType,
+                                      bool hasCursor,
+                                      QRect guestCursor,
+                                      unsigned changes) {
+    mHostImeInputType = inputType;
+    mHostImeHasCursor = hasCursor;
+    mHostImeGuestCursor = guestCursor;
+#ifdef _WIN32
+    const bool textMode = connected && active;
+#else
+    // Elsewhere the native event filters still forward keys themselves with
+    // keycode forwarding on, so they would reach the guest twice.
+    const bool textMode = false;
+#endif
+    if (textMode != mHostImeTextMode) {
+        setHostImeTextMode(textMode);
+    } else if (mHostImeTextMode &&
+               (changes & (ModavdImePipe::kFocusChanged |
+                           ModavdImePipe::kCursorChanged))) {
+        QGuiApplication::inputMethod()->update(Qt::ImHints |
+                                               Qt::ImCursorRectangle);
+    }
+}
+
+void EmulatorQtWindow::setHostImeTextMode(bool on) {
+    if (on == mHostImeTextMode) {
+        return;
+    }
+    QInputMethod* inputMethod = QGuiApplication::inputMethod();
+    if (on) {
+        // Once the input method is on it may take the releases of keys held
+        // down the usual way, which would leave them down in the guest:
+        // release them now and let the rest of their presses go nowhere.
+        for (auto it = mHostImeHeld.begin(); it != mHostImeHeld.end();) {
+            if (it->second.path != HostImePath::Raw) {
+                ++it;
+            } else if (!hostImeKeyIsDown(it->second)) {
+                it = mHostImeHeld.erase(it);
+            } else {
+                hostImeReleaseRawKey(it->second);
+                it->second.path = HostImePath::Dropped;
+                ++it;
+            }
+        }
+        mHostImeTextMode = true;
+        mHostImeComposing = false;
+        mContainer.setAttribute(Qt::WA_InputMethodEnabled, true);
+    } else {
+        // Drop an unfinished composition. Qt may hand it over as committed
+        // text first; handleInputMethodEvent() ignores it. Only when the
+        // composition is ours: reset() acts on whichever widget has one.
+        if (QGuiApplication::focusObject() == &mContainer) {
+            mHostImeResetting = true;
+            inputMethod->reset();
+            mHostImeResetting = false;
+        }
+        // Keys still held since text mode started go the usual way again
+        // from their next auto-repeat on.
+        for (auto it = mHostImeHeld.begin(); it != mHostImeHeld.end();) {
+            if (it->second.path != HostImePath::Dropped) {
+                ++it;
+            } else if (!hostImeKeyIsDown(it->second)) {
+                it = mHostImeHeld.erase(it);
+            } else {
+                it->second.path = HostImePath::Raw;
+                ++it;
+            }
+        }
+        mHostImeTextMode = false;
+        mHostImeComposing = false;
+        mContainer.setAttribute(Qt::WA_InputMethodEnabled, false);
+    }
+    inputMethod->update(Qt::ImEnabled | Qt::ImHints | Qt::ImCursorRectangle);
+    ModavdImePipe::setTextMode(on);
+    D("%s: host IME text mode %s", __func__, on ? "on" : "off");
+}
+
+// Returns true when the press is handled here, false when it takes the usual
+// path. A new press of a key decides its path; an auto-repeat, or a held key
+// Qt reports again as a new press after a modifier changes, keeps it.
+// Windows says which is which for each WM_KEYDOWN; Qt's isAutoRepeat() also
+// calls a new press an auto-repeat when Qt missed the last release.
+bool EmulatorQtWindow::hostImeKeyPress(const QKeyEvent& event) {
+    const quint32 id = hostImeKeyId(event);
+    HostImeNativeKey native = {};
+    const bool hasNative = hostImeTakeNativeKey(event, &native);
+    const bool newPress = hasNative ? native.newPress : !event.isAutoRepeat();
+    // Keycode forwarding sent it to the guest as it is already (just before
+    // text mode started), so it goes the usual way.
+    const bool forwarded = hasNative && native.forwarded;
+    const bool releaseTakenByIme = hasNative && native.releaseTakenByIme;
+    const HostImeKey key = {HostImePath::Raw, event.key(),
+                            event.nativeScanCode(), event.nativeVirtualKey()};
+
+    auto held = mHostImeHeld.find(id);
+    if (newPress || held == mHostImeHeld.end()) {
+        mHostImeHeld.erase(id);
+        held = mHostImeHeld.end();
+        if (mHostImeTextMode && !forwarded) {
+#ifdef _WIN32
+            // Qt 6 does not report keys the input method takes for composing
+            // (VK_PROCESSKEY); if it ever does, they are the input method's.
+            if (event.nativeVirtualKey() == VK_PROCESSKEY) {
+                mHostImeHeld[id] = {HostImePath::Ime, key.key,
+                                    key.nativeScanCode, key.nativeVirtualKey};
+                return true;
+            }
+#endif
+            if (hostImeSendKey(event)) {
+                if (!releaseTakenByIme) {
+                    mHostImeHeld[id] = {HostImePath::Ime, key.key,
+                                        key.nativeScanCode,
+                                        key.nativeVirtualKey};
+                }
+                return true;
+            }
+        }
+        held = mHostImeHeld.emplace(id, key).first;
+    } else if (held->second.path != HostImePath::Raw) {
+        if (held->second.path == HostImePath::Ime && mHostImeTextMode &&
+            !forwarded) {
+            hostImeSendKey(event);
+        }
+        if (releaseTakenByIme) {
+            mHostImeHeld.erase(held);
+        }
+        return true;
+    }
+
+    // The usual way.
+    if (releaseTakenByIme) {
+        // Qt drops the release the input method took: release it right
+        // after the press.
+        mHostImeHeld.erase(held);
+        mHostImeReleaseAfterPress = true;
+    }
+    if (hasNative && native.deferred) {
+        hostImeForwardNativeKey(native.forwardScancode);
+    }
+    return false;
+}
+
+bool EmulatorQtWindow::hostImeKeyRelease(const QKeyEvent& event) {
+    auto held = mHostImeHeld.find(hostImeKeyId(event));
+    if (held == mHostImeHeld.end()) {
+        return false;
+    }
+    const bool raw = held->second.path == HostImePath::Raw;
+    if (!event.isAutoRepeat()) {
+        mHostImeHeld.erase(held);
+    }
+    return !raw;
+}
+
+bool EmulatorQtWindow::hostImeKeyIsDown(const HostImeKey& key) const {
+#ifdef _WIN32
+    return mHostImeNativeDown.count(key.nativeScanCode) > 0;
+#else
+    return true;
+#endif
+}
+
+bool EmulatorQtWindow::hostImeDefersNativeKey(quint32 nativeScancode) const {
+    if (mHostImeTextMode) {
+        return true;
+    }
+    auto held = mHostImeHeld.find(nativeScancode);
+    return held != mHostImeHeld.end() && held->second.path != HostImePath::Raw;
+}
+
+// Releases a key held down the usual way, as its release event would.
+void EmulatorQtWindow::hostImeReleaseRawKey(const HostImeKey& key) {
+    QKeyEvent release(QEvent::KeyRelease, key.key,
+                      QGuiApplication::queryKeyboardModifiers(),
+                      key.nativeScanCode, key.nativeVirtualKey, 0);
+    handleKeyEvent(kEventKeyUp, release);
+}
+
+void EmulatorQtWindow::hostImeNativeKeyUp(quint32 nativeScancode,
+                                          bool takenByIme) {
+    mHostImeNativeDown.erase(nativeScancode);
+    if (!takenByIme) {
+        return;
+    }
+    // If key events of this key are still on their way, the last one
+    // carries the release; else a key that went the usual way is released
+    // now.
+    hostImeExpireNativeKeys();
+    for (auto it = mHostImeNativeKeys.rbegin(); it != mHostImeNativeKeys.rend();
+         ++it) {
+        if (it->nativeScancode == nativeScancode) {
+            it->releaseTakenByIme = true;
+            return;
+        }
+    }
+    auto held = mHostImeHeld.find(nativeScancode);
+    if (held != mHostImeHeld.end()) {
+        const HostImeKey key = held->second;
+        mHostImeHeld.erase(held);
+        if (key.path == HostImePath::Raw) {
+            hostImeReleaseRawKey(key);
+        }
+    }
+}
+
+// Sends |event| to the guest input method if text mode takes it; returns
+// false for keys that go the usual way.
+bool EmulatorQtWindow::hostImeSendKey(const QKeyEvent& event) {
+    const Qt::KeyboardModifiers mods = event.modifiers();
+    const bool shift = mods & Qt::ShiftModifier;
+    const bool ctrl = mods & Qt::ControlModifier;
+    const bool alt = mods & Qt::AltModifier;
+    if (mods & Qt::MetaModifier) {
+        return false;
+    }
+
+    // Printable text, AltGr (Ctrl+Alt on Windows) included. Ctrl or Alt
+    // alone make shortcuts, not text.
+    const QString text = event.text();
+    if (!text.isEmpty() && ctrl == alt &&
+        std::all_of(text.begin(), text.end(), [](QChar c) {
+            return c.unicode() >= 0x20 && c.unicode() != 0x7f;
+        })) {
+        return ModavdImePipe::sendCommit(text.toStdString());
+    }
+
+    // Editing keys, and Ctrl(+Shift)+letter. A dead key followed by Enter,
+    // Tab or Backspace gives the dead key's text with that key's press, then
+    // a press Qt makes up for the key's own character, with key() 0.
+    uint32_t keycode = hostImeEditingKeycode(event.key());
+    if (!keycode && event.key() == 0 && text.size() == 1) {
+        const ushort c = text.at(0).unicode();
+        keycode = c == '\r' ? hostImeEditingKeycode(Qt::Key_Return)
+                  : c == '\t' ? hostImeEditingKeycode(Qt::Key_Tab)
+                  : c == '\b' ? hostImeEditingKeycode(Qt::Key_Backspace)
+                              : 0;
+    }
+    if (keycode) {
+        // The emulator's own shortcuts on these keys (Ctrl+Backspace,
+        // Ctrl+arrows) keep working.
+        if (!mForwardShortcutsToDevice && mToolWindow->isShortcutKey(event)) {
+            return false;
+        }
+    } else if (ctrl && !alt) {
+        int letter = event.key();
+        if (letter < Qt::Key_A || letter > Qt::Key_Z) {
+            // Layouts without Latin letters: the virtual key still is one.
+            const quint32 vk = event.nativeVirtualKey();
+            letter = (vk >= 'A' && vk <= 'Z') ? int(Qt::Key_A + (vk - 'A')) : 0;
+        }
+        if (letter) {
+            keycode = kAndroidKeycodeA + uint32_t(letter - Qt::Key_A);
+        }
+    }
+    if (!keycode) {
+        return false;
+    }
+    uint32_t metaState = 0;
+    if (shift) {
+        metaState |= kAndroidMetaShiftOn;
+    }
+    if (ctrl) {
+        metaState |= kAndroidMetaCtrlOn;
+    }
+    if (alt) {
+        metaState |= kAndroidMetaAltOn;
+    }
+    return ModavdImePipe::sendKey(keycode, metaState,
+                                  ModavdImePipe::kKeyDownUp);
+}
+
+void EmulatorQtWindow::hostImeNativeKeyDown(quint32 nativeScancode,
+                                           bool newPress,
+                                           bool modifier,
+                                           quint32 forwardScancode,
+                                           bool forwarded,
+                                           bool deferred) {
+    mHostImeNativeDown.insert(nativeScancode);
+    if (modifier && !newPress) {
+        return;  // Qt reports no auto-repeats of modifiers
+    }
+    hostImeExpireNativeKeys();
+    if (mHostImeNativeKeys.size() >= kHostImeMaxNativeKeys) {
+        mHostImeNativeKeys.pop_front();
+    }
+    mHostImeNativeKeys.push_back({nativeScancode, forwardScancode,
+                                  hostImeNowMs(), newPress, forwarded,
+                                  deferred, false});
+}
+
+void EmulatorQtWindow::hostImeExpireNativeKeys() {
+    const qint64 now = hostImeNowMs();
+    while (!mHostImeNativeKeys.empty() &&
+           now - mHostImeNativeKeys.front().timeMs > kHostImeNativeKeyMs) {
+        mHostImeNativeKeys.pop_front();
+    }
+}
+
+// Takes the native event filter's record of |event|'s WM_KEYDOWN, if any.
+bool EmulatorQtWindow::hostImeTakeNativeKey(const QKeyEvent& event,
+                                            HostImeNativeKey* key) {
+    hostImeExpireNativeKeys();
+    for (auto it = mHostImeNativeKeys.begin(); it != mHostImeNativeKeys.end();
+         ++it) {
+        if (it->nativeScancode == event.nativeScanCode()) {
+            *key = *it;
+            mHostImeNativeKeys.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Sends a WM_KEYDOWN the native event filter left to the key event, the way
+// the filter forwards keys.
+void EmulatorQtWindow::hostImeForwardNativeKey(quint32 scancode) {
+    if (!getConsoleAgents()->settings->use_keycode_forwarding()) {
+        return;
+    }
+    NativeKeyboardEventHandler::KeyEvent keyEv;
+    keyEv.scancode = static_cast<int>(scancode);
+    keyEv.modifiers = 0;
+    keyEv.eventType = kEventKeyDown;
+    std::optional<SkinEvent> maybeEvent =
+            NativeKeyboardEventHandler::getInstance()->handleKeyEvent(keyEv);
+    if (maybeEvent.has_value()) {
+        queueSkinEvent(std::move(maybeEvent.value()));
+    }
+}
+
+void EmulatorQtWindow::handleInputMethodEvent(QInputMethodEvent* event) {
+    event->accept();
+    if (!mHostImeTextMode || mHostImeResetting) {
+        return;
+    }
+    const QString commit = event->commitString();
+    const QString preedit = event->preeditString();
+
+    if (event->replacementStart() != 0 || event->replacementLength() != 0) {
+        // Without composing text the replacement is relative to the cursor,
+        // which deleteSurroundingText() can do when it covers the cursor.
+        const int start = event->replacementStart();
+        const int length = event->replacementLength();
+        if (!mHostImeComposing && start <= 0 && length >= -start) {
+            ModavdImePipe::sendDelete(-start, length + start);
+        } else {
+            dwarning("host IME: replacement %d+%d not applied", start, length);
+        }
+    }
+    if (!commit.isEmpty()) {
+        ModavdImePipe::sendCommit(commit.toStdString());
+        mHostImeComposing = false;
+    }
+    if (!preedit.isEmpty()) {
+        int cursor = -1;
+        for (const QInputMethodEvent::Attribute& a : event->attributes()) {
+            if (a.type == QInputMethodEvent::Cursor) {
+                cursor = a.start;
+                break;
+            }
+        }
+        ModavdImePipe::sendPreedit(cursor, preedit.toStdString());
+        mHostImeComposing = true;
+    } else if (commit.isEmpty() && mHostImeComposing) {
+        ModavdImePipe::sendPreedit(-1, std::string());
+        ModavdImePipe::sendFinishComposing();
+        mHostImeComposing = false;
+    }
+}
+
+QVariant EmulatorQtWindow::hostImeQuery(Qt::InputMethodQuery query) const {
+    if (!mHostImeTextMode) {
+        return QVariant();
+    }
+    switch (query) {
+        case Qt::ImEnabled:
+            return true;
+        case Qt::ImHints: {
+            Qt::InputMethodHints hints = Qt::ImhNone;
+            const uint32_t typeClass = mHostImeInputType & kInputTypeMaskClass;
+            const uint32_t variation =
+                    mHostImeInputType & kInputTypeMaskVariation;
+            if ((typeClass == kInputTypeClassText &&
+                 (variation == kInputTypeTextVariationPassword ||
+                  variation == kInputTypeTextVariationVisiblePassword ||
+                  variation == kInputTypeTextVariationWebPassword)) ||
+                (typeClass == kInputTypeClassNumber &&
+                 variation == kInputTypeNumberVariationPassword)) {
+                hints |= Qt::ImhHiddenText | Qt::ImhSensitiveData |
+                         Qt::ImhNoPredictiveText;
+            }
+            if (typeClass == kInputTypeClassNumber) {
+                hints |= Qt::ImhPreferNumbers;
+            }
+            return QVariant(hints.toInt());
+        }
+        case Qt::ImCursorRectangle:
+            return hostImeCursorRect();
+        default:
+            return QVariant();
+    }
+}
+
+// The guest's cursor rectangle in the container's coordinates: the inverse of
+// the mouse mapping (skin_surface_reverse_map(), then the display's place in
+// the layout). Skin rotation turns the layout and the guest together, and
+// zoom mode scrolls this widget inside the container.
+QRect EmulatorQtWindow::hostImeCursorRect() const {
+    // The guest display in this widget's coordinates, and its size in guest
+    // pixels.
+    QRectF display(rect());
+    QSizeF guest;
+    if (mBackingSurface && mBackingSurface->bitmap &&
+        mBackingSurface->w > 0 && mBackingSurface->h > 0) {
+        if (hasSkin() && !mInZoomMode && mDeviceGeometry.isValid()) {
+            // A device frame: the display is where the GL subwindow is,
+            // which outside zoom mode has the same place in the container
+            // as in this widget.
+            const auto hw = getConsoleAgents()->settings->hw();
+            const bool sideways = mOrientation == SKIN_ROTATION_90 ||
+                                  mOrientation == SKIN_ROTATION_270;
+            guest = sideways ? QSizeF(hw->hw_lcd_height, hw->hw_lcd_width)
+                             : QSizeF(hw->hw_lcd_width, hw->hw_lcd_height);
+            display = QRectF(mDeviceGeometry);
+        } else {
+            // No frame: the display fills the layout, which this widget
+            // shows scaled to its size.
+            guest = QSizeF(mBackingSurface->bitmap->size());
+            display = QRectF(0, 0, mBackingSurface->w, mBackingSurface->h);
+        }
+    }
+    const int lineHeight = mContainer.fontMetrics().height();
+    // Without a cursor from the guest: the display's bottom left corner.
+    QRect area(qRound(display.left()), qRound(display.bottom()) - lineHeight, 1,
+               lineHeight);
+    if (mHostImeHasCursor && !guest.isEmpty()) {
+        const double sx = display.width() / guest.width();
+        const double sy = display.height() / guest.height();
+        auto x = [&](int v) {
+            return display.left() + qBound(0.0, double(v), guest.width()) * sx;
+        };
+        auto y = [&](int v) {
+            return display.top() + qBound(0.0, double(v), guest.height()) * sy;
+        };
+        // left()/top()/right()/bottom() hold the guest values as sent.
+        const QRect& c = mHostImeGuestCursor;
+        area = QRectF(QPointF(x(std::min(c.left(), c.right())),
+                              y(std::min(c.top(), c.bottom()))),
+                      QPointF(x(std::max(c.left(), c.right())),
+                              y(std::max(c.top(), c.bottom()))))
+                       .toAlignedRect();
+        area.setWidth(std::max(area.width(), 1));
+        area.setHeight(std::max(area.height(), 1));
+    }
+    return QRect(mapTo(&mContainer, area.topLeft()), area.size());
+}
+
+void EmulatorQtWindow::hostImeUpdateCursor() {
+    if (mHostImeTextMode) {
+        QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle);
     }
 }
 

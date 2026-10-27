@@ -98,6 +98,12 @@ public:
         return must_call_handler;
     }
 
+    // Returns true if handle() would call its handler for the key sequence.
+    bool handles(const QKeySequence& key_seq) const {
+        return !mKeySequencesHandledExternally.contains(key_seq) &&
+               mKeySequenceToCommandMap.contains(key_seq);
+    }
+
     // Performs a reverse lookup: return a vector with all the shortcut keys
     // (or nullptr if no shortucts correspond to the given command)
     QVector<QKeySequence>* reverseLookup(CommandType cmd) {

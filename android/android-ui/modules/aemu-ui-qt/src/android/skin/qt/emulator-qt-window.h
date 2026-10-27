@@ -40,6 +40,7 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QImageReader>
+#include <QInputMethodEvent>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
@@ -54,6 +55,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -265,6 +267,36 @@ public:
                         bool skipSync = false);
     void handleMouseWheelEvent(int delta, Qt::Orientation orientation);
     void handleKeyEvent(SkinEventType type, const QKeyEvent& event);
+
+    // Host IME text mode: while the guest input method (ModAVD Host Input)
+    // reports an editable text field, typed text and composition from the
+    // host's own input method go to it over the modavd_ime pipe. UI thread.
+    bool isHostImeTextMode() const { return mHostImeTextMode; }
+    void handleInputMethodEvent(QInputMethodEvent* event);
+    // An invalid value means the query is not the host IME's to answer.
+    QVariant hostImeQuery(Qt::InputMethodQuery query) const;
+    // Keycode forwarding: whether the native event filter leaves a WM_KEYDOWN
+    // to the key event, which then decides whether it still goes to the
+    // guest. True in text mode, and for a key whose press went to the host
+    // IME or was dropped when text mode started.
+    bool hostImeDefersNativeKey(quint32 nativeScancode) const;
+    // A WM_KEYDOWN or WM_SYSKEYDOWN to this window that the native event
+    // filter saw, except one the host input method took: whether the key was
+    // up before it, whether it is a modifier, and, with keycode forwarding,
+    // the scancode to forward and whether the filter sent it to the guest
+    // already or left it to the key event.
+    void hostImeNativeKeyDown(quint32 nativeScancode,
+                              bool newPress,
+                              bool modifier,
+                              quint32 forwardScancode,
+                              bool forwarded,
+                              bool deferred);
+    // A WM_KEYUP or WM_SYSKEYUP; |takenByIme| when the host input method
+    // took it (VK_PROCESSKEY in text mode), and Qt drops it.
+    void hostImeNativeKeyUp(quint32 nativeScancode, bool takenByIme);
+    // The native window that gets this window's key messages.
+    WId hostImeKeyWindow() const { return mContainer.effectiveWinId(); }
+
     void panHorizontal(bool left);
     void panVertical(bool up);
     void queueSkinEvent(SkinEvent event);
@@ -490,6 +522,26 @@ private:
     void forwardKeyEventToEmulator(SkinEventType type, const QKeyEvent& event);
     void forwardGenericEventToEmulator(int type, int code, int value);
 
+    void onHostImeState(bool connected,
+                        bool active,
+                        uint32_t inputType,
+                        bool hasCursor,
+                        QRect guestCursor,
+                        unsigned changes);
+    void setHostImeTextMode(bool on);
+    bool hostImeKeyPress(const QKeyEvent& event);
+    bool hostImeKeyRelease(const QKeyEvent& event);
+    bool hostImeSendKey(const QKeyEvent& event);
+    struct HostImeNativeKey;
+    void hostImeExpireNativeKeys();
+    bool hostImeTakeNativeKey(const QKeyEvent& event, HostImeNativeKey* key);
+    void hostImeForwardNativeKey(quint32 scancode);
+    struct HostImeKey;
+    bool hostImeKeyIsDown(const HostImeKey& key) const;
+    void hostImeReleaseRawKey(const HostImeKey& key);
+    void hostImeUpdateCursor();
+    QRect hostImeCursorRect() const;
+
     void maskWindowFrame();
     bool hasFrame() const;
     bool hasSkin() const;
@@ -532,6 +584,49 @@ private:
     QRect mDeviceGeometry;
 
     std::unordered_set<int> mHeldModifiers;
+
+    // Host IME text mode state, see isHostImeTextMode().
+    int mHostImeCallbackId = 0;
+    bool mHostImeTextMode = false;
+    bool mHostImeResetting = false;  // inside QInputMethod::reset()
+    bool mHostImeComposing = false;  // the guest has composing text from us
+    uint32_t mHostImeInputType = 0;
+    bool mHostImeHasCursor = false;
+    QRect mHostImeGuestCursor;  // guest display pixels
+    // The path each key's latest press took, by key: its auto-repeats, a
+    // press Qt reports again after a modifier changes, and its release
+    // follow it. A new press decides afresh, so an entry whose release never
+    // came (Qt drops some) does no harm. Cleared on focus loss.
+    enum class HostImePath : uint8_t {
+        Ime,      // went to the host IME instead of the guest
+        Raw,      // went the usual way
+        Dropped,  // went the usual way and was released when text mode
+                  // started; the rest of the press goes nowhere
+    };
+    struct HostImeKey {
+        HostImePath path;
+        int key;
+        quint32 nativeScanCode;
+        quint32 nativeVirtualKey;
+    };
+    std::unordered_map<quint32, HostImeKey> mHostImeHeld;
+    // Windows: scancodes down by WM_KEYDOWN / WM_KEYUP, and the WM_KEYDOWNs
+    // whose key events have not come yet. Qt delivers key events later,
+    // maybe after more messages, and none for some WM_KEYDOWNs.
+    std::unordered_set<quint32> mHostImeNativeDown;
+    struct HostImeNativeKey {
+        quint32 nativeScancode;
+        quint32 forwardScancode;
+        qint64 timeMs;
+        bool newPress;           // the key was up before
+        bool forwarded;          // keycode forwarding sent it already
+        bool deferred;           // keycode forwarding left it to us
+        bool releaseTakenByIme;  // the input method took its release
+    };
+    std::deque<HostImeNativeKey> mHostImeNativeKeys;
+    // Set by hostImeKeyPress() for keyPressEvent(): the key went the usual
+    // way, and the input method took its release.
+    bool mHostImeReleaseAfterPress = false;
 
     bool mMouseGrabbed = false;
     bool mMouseRepositioning = false;
