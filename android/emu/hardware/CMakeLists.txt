@@ -22,6 +22,7 @@ android_add_library(
       android/emulation/goldfish_sync.cpp
       android/emulation/GoldfishSyncCommandQueue.cpp
       android/emulation/LogcatPipe.cpp
+      android/emulation/ModavdImePipe.cpp
       android/emulation/qemud/android_qemud_client.cpp
       android/emulation/qemud/android_qemud_multiplexer.cpp
       android/emulation/qemud/android_qemud_serial.cpp
