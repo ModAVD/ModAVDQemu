@@ -402,9 +402,17 @@ static u32 compute_blocks_per_group()
 	return info.block_size * 8;
 }
 
+/* MAS: at most as many inodes as a 16 GiB filesystem gets. /data sits on
+ * dm-default-key (metadata encryption), so the guest's ext4lazyinit writes
+ * the whole inode table as ciphertext on first boot and the qcow2 disk
+ * allocates all of it: 1 GiB for a 64 GiB partition, 256 MiB with the cap.
+ * Instances with games installed used 10k-44k inodes. */
+#define MAX_COMPUTED_INODES (1024 * 1024)
+
 static u32 compute_inodes()
 {
-	return DIV_ROUND_UP(info.len, info.block_size) / 4;
+	u64 inodes = DIV_ROUND_UP(info.len, info.block_size) / 4;
+	return inodes > MAX_COMPUTED_INODES ? MAX_COMPUTED_INODES : inodes;
 }
 
 static u32 compute_inodes_per_group()
