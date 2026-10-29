@@ -551,6 +551,51 @@ static bool volumeSupportsSparseFiles(const std::string& dir) {
 }
 #endif
 
+// MAS local: grow (never shrink) the virtual size of an existing userdata
+// overlay to |newSize| bytes with qemu-img. The guest then sees a larger data
+// disk; growing the file system on it is left to the guest (online resize2fs
+// after boot). Returns true when the overlay is at least |newSize| afterwards.
+static bool growUserDataOverlay(const std::string& overlay, uint64_t newSize) {
+    auto qemu_img = System::get()->findBundledExecutable("qemu-img");
+    System::ProcessExitCode exitCode = -1;
+    auto info = System::get()->runCommandWithResult(
+            {qemu_img, "info", "--output=json", overlay}, 30000, &exitCode);
+    if (!info || exitCode != 0) {
+        dwarning("cannot read the size of %s (exit code %d); the data "
+                 "partition is left as it is",
+                 overlay.c_str(), (int)exitCode);
+        return false;
+    }
+    const std::string& out = *info;
+    const size_t key = out.find("\"virtual-size\"");
+    const size_t colon =
+            key == std::string::npos ? std::string::npos : out.find(':', key);
+    if (colon == std::string::npos) {
+        dwarning("no virtual size in the qemu-img info of %s; the data "
+                 "partition is left as it is",
+                 overlay.c_str());
+        return false;
+    }
+    const uint64_t current = strtoull(out.c_str() + colon + 1, nullptr, 10);
+    if (current >= newSize) {
+        return true;
+    }
+    dwarning("userdata partition grows from %llu M to %llu M (overlay %s); "
+             "the guest grows its file system after boot",
+             (unsigned long long)(current / (1024 * 1024)),
+             (unsigned long long)(newSize / (1024 * 1024)), overlay.c_str());
+    exitCode = -1;
+    auto res = System::get()->runCommandWithResult(
+            {qemu_img, "resize", overlay, std::to_string(newSize)},
+            System::kInfinite, &exitCode);
+    if (!res || exitCode != 0) {
+        dwarning("qemu-img resize %s failed (exit code %d): %s",
+                 overlay.c_str(), (int)exitCode, res ? res->c_str() : "");
+        return false;
+    }
+    return true;
+}
+
 static void convertExt4ToQcow2(std::string ext4filepath) {
     if (!path_exists(ext4filepath.c_str())) {
         return;
@@ -2670,6 +2715,22 @@ extern "C" int main(int argc, char** argv) {
         if (ret != 0) {
             crashhandler_die("Failed to initialize userdata.img.");
             return ret;
+        }
+    } else if (path_exists(StringFormat("%s.qcow2", hw->disk_dataPartition_path)
+                                   .c_str())) {
+        // MAS local: an instance that has booted before keeps every guest
+        // write in userdata-qemu.img.qcow2, and on images with EncryptUserData
+        // the guest reformatted /data through dm-default-key on its first boot,
+        // so the base image is not the guest's file system at all. The upstream
+        // branch below resized the base and then deleted the overlay, which on
+        // such an instance silently wipes all user data (and with a qcow2 base
+        // did nothing at all). Grow the overlay instead; never touch the base.
+        if (getConsoleAgents()->settings->hw()->disk_dataPartition_size > 0) {
+            growUserDataOverlay(
+                    StringFormat("%s.qcow2", hw->disk_dataPartition_path),
+                    (uint64_t)getConsoleAgents()
+                            ->settings->hw()
+                            ->disk_dataPartition_size);
         }
     } else {
         // Resize userdata-qemu.img if the size is smaller than what
