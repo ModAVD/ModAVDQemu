@@ -454,10 +454,16 @@ void inode_attach_resize(struct ext4_inode *inode,
 			info.block_size * info.bg_desc_reserve_blocks,
 			get_block(alloc, 0));
 
-	for (i = 0; i < info.bg_desc_reserve_blocks; i++) {
-		int r = (i - aux_info.bg_desc_blocks) % info.bg_desc_reserve_blocks;
-		if (r < 0)
-			r += info.bg_desc_reserve_blocks;
+	/* Reserved GDT block r sits at double-indirect slot (bg_desc_blocks + r) modulo
+	 * the slots per block, which is where the kernel's online resize
+	 * (reserve_backup_gdb, add_new_gdb) and e2fsprogs look for it. Taking the modulo
+	 * of bg_desc_reserve_blocks instead only agrees when that is a full block of
+	 * slots: with fewer (any file system of 128 groups or less, e.g. a 16 GB data
+	 * partition) the last reserved block lands in slot 0, and an online resize
+	 * stops at the first new group that carries a superblock backup ("reserved
+	 * block ... not at offset ..."). */
+	for (u32 r = 0; r < info.bg_desc_reserve_blocks; r++) {
+		i = (aux_info.bg_desc_blocks + r) % aux_info.blocks_per_ind;
 
 		dind_block_data[i] = get_block(alloc, r);
 
