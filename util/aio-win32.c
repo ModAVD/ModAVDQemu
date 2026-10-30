@@ -56,11 +56,11 @@ void aio_set_fd_handler(AioContext *ctx,
 
     /* Are we deleting the fd handler? */
     if (!io_read && !io_write) {
-        assert(!node->io_notify);
-        /* Detach the event */
-        WSAEventSelect(node->pfd.fd, NULL, 0);
-
         if (node) {
+            assert(!node->io_notify);
+            /* Detach the event */
+            WSAEventSelect(node->pfd.fd, NULL, 0);
+
             /* If aio_poll is in progress, just mark the node as deleted */
             if (qemu_lockcnt_count(&ctx->list_lock)) {
                 node->deleted = 1;
