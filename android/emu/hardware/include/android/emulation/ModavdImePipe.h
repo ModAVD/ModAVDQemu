@@ -95,6 +95,22 @@ public:
                     void** newPipePtr) override;
     void onGuestWantWakeOn(int flags) override;
 
+    // One Qt input event is enqueued atomically, including replacement and
+    // composition changes. Success means queued, not acknowledged by the guest.
+    // Failure queues nothing.
+    struct InputEvent {
+        int32_t deleteBefore = 0;
+        int32_t deleteAfter = 0;
+        bool hasCommit = false;
+        std::string commit;
+        bool setPreedit = false;
+        int32_t cursor = -1;
+        std::string preedit;
+        bool finishComposing = false;
+    };
+    static bool sendInputEvent(const InputEvent& input,
+                               std::string* error = nullptr);
+
     // Host -> guest. Each returns false and fills |error| (if not null) when
     // no guest is connected or the frame can't be sent.
     static bool sendCommit(const std::string& text,
@@ -127,6 +143,7 @@ private:
                           std::string* error);
     bool queueFrameLocked(const uint8_t* payload, size_t size);
     bool queueFrame(const std::vector<uint8_t>& payload, std::string* error);
+    bool queueBatch(const std::vector<uint8_t>& frames, std::string* error);
     bool handleFrameLocked(Update* update);
     void closeFromHostLocked();
     void detach();
