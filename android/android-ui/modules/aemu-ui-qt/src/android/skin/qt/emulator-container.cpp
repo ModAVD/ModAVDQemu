@@ -86,7 +86,7 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
                             Qt::WindowCloseButtonHint)
                          : Qt::WindowFlags()));
     if (lean) {
-        setStyleSheet(QStringLiteral("EmulatorContainer { background: #000000; }"));
+        setStyleSheet(QStringLiteral("EmulatorContainer { background: #E8E8E8; }"));
     }
 #endif
 

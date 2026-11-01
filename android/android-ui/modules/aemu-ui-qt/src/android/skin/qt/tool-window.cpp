@@ -969,9 +969,11 @@ void ToolWindow::createWindowNavColumn() {
     mWindowNavColumn = new QWidget(mEmulatorWindow->containerWindow());
     mWindowNavColumn->setObjectName(QStringLiteral("windowNavColumn"));
     mWindowNavColumn->setStyleSheet(QStringLiteral(
-            "#windowNavColumn { background: #000000; }"
-            "#windowNavColumn QPushButton { background: #000000; color: #ffffff; border: 0; }"
-            "#windowNavColumn QPushButton:hover, #windowNavColumn QPushButton:pressed { background: #333333; }"));
+            "#windowNavColumn { background: #E8E8E8; }"
+            "#windowNavColumn QPushButton { background: #E8E8E8; color: #141414; border: 0; }"
+            "#windowNavColumn QPushButton:hover { background: #D9D9D9; }"
+            "#windowNavColumn QPushButton:pressed { background: #CCCCCC; }"
+            "#windowNavColumn QPushButton:disabled { color: #A0A0A0; background: #E8E8E8; }"));
     mWindowNavColumn->setFocusPolicy(Qt::NoFocus);
     auto* layout = new QVBoxLayout(mWindowNavColumn);
     layout->setContentsMargins(10, 0, 10, 0);
@@ -1793,7 +1795,12 @@ void ToolWindow::updateTheme(const QString& styleSheet) {
             [&] { mTouchpadWindow.get()->setStyleSheet(styleSheet); });
     setStyleSheet(styleSheet);
     if (mWindowNavColumn) {
-        mWindowNavColumn->setStyleSheet(styleSheet);
+        mWindowNavColumn->setStyleSheet(QStringLiteral(
+                "#windowNavColumn { background: #E8E8E8; }"
+                "#windowNavColumn QPushButton { background: #E8E8E8; color: #141414; border: 0; }"
+                "#windowNavColumn QPushButton:hover { background: #D9D9D9; }"
+                "#windowNavColumn QPushButton:pressed { background: #CCCCCC; }"
+                "#windowNavColumn QPushButton:disabled { color: #A0A0A0; background: #E8E8E8; }"));
         remaskButtons();
     }
 }
