@@ -27,3 +27,25 @@ int numHeldMouseButtons() {
     }
     return numHeld;
 }
+
+void setDarkTitleBar(WId wid) {
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    if (!dwm || !wid) {
+        return;
+    }
+    using SetAttr = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    auto setAttr = reinterpret_cast<SetAttr>(GetProcAddress(dwm, "DwmSetWindowAttribute"));
+    if (!setAttr) {
+        FreeLibrary(dwm);
+        return;
+    }
+    const BOOL dark = TRUE;
+    if (FAILED(setAttr(reinterpret_cast<HWND>(wid), 20, &dark, sizeof(dark)))) {
+        setAttr(reinterpret_cast<HWND>(wid), 19, &dark, sizeof(dark));
+    }
+    const DWORD black = 0x00000000;
+    const DWORD white = 0x00ffffff;
+    setAttr(reinterpret_cast<HWND>(wid), 35, &black, sizeof(black));
+    setAttr(reinterpret_cast<HWND>(wid), 36, &white, sizeof(white));
+    FreeLibrary(dwm);
+}

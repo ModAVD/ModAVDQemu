@@ -796,15 +796,6 @@ EmulatorQtWindow::EmulatorQtWindow(QWidget* parent)
             startSafeShutdownSync();
         }
     });
-    mSafeShutdownGraceTimer.setSingleShot(true);
-    mSafeShutdownGraceTimer.setInterval(3000);
-    QObject::connect(&mSafeShutdownGraceTimer, &QTimer::timeout, this, [this] {
-        if (mSafeShutdownState == SafeShutdownState::GuestStopped &&
-            isMainThreadRunning()) {
-            LOG(WARNING) << "Guest is shut down but qemu did not exit; forcing exit";
-            forceCloseNow();
-        }
-    });
     QObject::connect(this, &EmulatorQtWindow::requestUpdate, this,
                      &EmulatorQtWindow::slot_requestUpdate);
     QObject::connect(this, &EmulatorQtWindow::setDeviceGeometry, this,
@@ -1206,16 +1197,17 @@ void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
     }
 
     if (!isMainThreadRunning()) {
-        if (auto* modal = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
-            modal->done(QMessageBox::No);
-        }
         mSafeShutdownTimeout.stop();
-        mSafeShutdownGraceTimer.stop();
+        if (mSafeShutdownState == SafeShutdownState::StoppingGuest ||
+            mSafeShutdownState == SafeShutdownState::Syncing) {
+            System::get()->waitAndKillSelf(3);
+        }
         mSafeShutdownState = SafeShutdownState::Idle;
     }
 
     // make sure to use the close button on tool window
-    if (isMainThreadRunning() && !mToolWindow->closeButtonClicked()) {
+    if (isMainThreadRunning() && !mToolWindow->closeButtonClicked() &&
+        !ToolWindow::inWindowNav()) {
         mToolWindow->on_close_button_clicked();
         event->ignore();
         return;
@@ -2542,7 +2534,8 @@ void EmulatorQtWindow::slot_releaseBitmap(SkinSurface* s,
 }
 
 void EmulatorQtWindow::slot_requestClose(QSemaphore* semaphore) {
-    if (isMainThreadRunning() && !mToolWindow->closeButtonClicked()) {
+    if (isMainThreadRunning() && !mToolWindow->closeButtonClicked() &&
+        !ToolWindow::inWindowNav()) {
         mToolWindow->on_close_button_clicked();
     }
     QSemaphoreReleaser semReleaser(semaphore);
@@ -4153,10 +4146,9 @@ void EmulatorQtWindow::toggleZoomMode() {
 }
 
 void EmulatorQtWindow::recenterFocusPoint() {
-    const QSize viewport = mContainer.viewportSize();
-    mContainer.horizontalScrollBar()->setValue(mFocus.x() * viewport.width() -
+    mContainer.horizontalScrollBar()->setValue(mFocus.x() * width() -
                                                mViewportFocus.x());
-    mContainer.verticalScrollBar()->setValue(mFocus.y() * viewport.height() -
+    mContainer.verticalScrollBar()->setValue(mFocus.y() * height() -
                                              mViewportFocus.y());
 
     mFocus = QPointF();
@@ -4243,7 +4235,7 @@ void EmulatorQtWindow::zoomTo(const QPoint& focus, const QSize& rectSize) {
     // scale x" through the emulator console. At scale = 1, the device
     // should be at a 1:1 pixel mapping with the monitor. We allow going to
     // twice this size.
-    double scale = ((double)guestAreaSize().width() /
+    double scale = ((double)size().width() /
                     (double)mBackingSurface->bitmap->size().width());
 
     // Calculate the "ideal" zoom factor, which would perfectly frame this
@@ -4251,9 +4243,11 @@ void EmulatorQtWindow::zoomTo(const QPoint& focus, const QSize& rectSize) {
     // pick the smaller one. Adding 20 accounts for the scroll bars
     // potentially cutting off parts of the selection
     double maxZoom = mZoomFactor * 2.0 / scale;
-    double idealWidthZoom = mZoomFactor * (double)mContainer.width() /
+    const QSize zoomArea = ToolWindow::inWindowNav() ? guestAreaSize()
+                                                      : mContainer.size();
+    double idealWidthZoom = mZoomFactor * (double)zoomArea.width() /
                             (double)(rectSize.width() + 20);
-    double idealHeightZoom = mZoomFactor * (double)mContainer.height() /
+    double idealHeightZoom = mZoomFactor * (double)zoomArea.height() /
                              (double)(rectSize.height() + 20);
 
     simulateSetZoom(std::min({idealWidthZoom, idealHeightZoom, maxZoom}));
@@ -4563,6 +4557,7 @@ void EmulatorQtWindow::startSafeShutdown() {
     }
 
     mSafeShutdownState = SafeShutdownState::StoppingGuest;
+    System::get()->waitAndKillSelf(25);
     updateWindowTitle();
     mSafeShutdownTimeout.start();
     auto* adb = *mAdbInterface;
@@ -4609,7 +4604,6 @@ void EmulatorQtWindow::startSafeShutdownSync() {
 
     mSafeShutdownState = SafeShutdownState::Syncing;
     mSafeShutdownTimeout.stop();
-    mSafeShutdownGraceTimer.stop();
     auto* adb = *mAdbInterface;
     if (!adb) {
         LOG(WARNING) << "Safe toolbar shutdown could not run guest sync";
@@ -4649,7 +4643,6 @@ void EmulatorQtWindow::forceCloseNow() {
     mSafeShutdownState = SafeShutdownState::Forced;
     updateWindowTitle();
     mSafeShutdownTimeout.stop();
-    mSafeShutdownGraceTimer.stop();
     queueQuitEvent();
     System::get()->waitAndKillSelf(3);
 }
@@ -5035,7 +5028,9 @@ bool EmulatorQtWindow::addMultiDisplayWindow(uint32_t id,
             LOG(INFO) << "DisplayId: " << id << ", Title: " << tId;
             snprintf(title, 16, "Display %d", tId);
             mMultiDisplayWindow[id]->setWindowTitle(title);
-            QRect geoTool = mContainer.frameGeometry();
+            QRect geoTool = ToolWindow::inWindowNav()
+                                     ? mContainer.frameGeometry()
+                                     : mToolWindow->geometry();
             mMultiDisplayWindow[id]->move(
                     geoTool.right() + (mMultiDisplayWindow.size() - 1) * 100,
                     geoTool.top());

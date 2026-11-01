@@ -669,6 +669,7 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
         // Hide everything else; all_apps_button remains the home button for
         // AVDs that use AllAppsForHomeTray.
         const QPushButton* keep[] = {
+                mToolsUi->close_button,    mToolsUi->minimize_button,
                 mToolsUi->back_button,     mToolsUi->home_button,
                 mToolsUi->all_apps_button,
         };
@@ -712,8 +713,10 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
         mToolsUi->back_button->setToolTip(QString::fromUtf8("返回"));
         mToolsUi->home_button->setToolTip(QString::fromUtf8("主页"));
         mToolsUi->all_apps_button->setToolTip(QString::fromUtf8("主页"));
-        mToolsUi->close_button->hide();
-        mToolsUi->minimize_button->hide();
+        if (inWindowNav()) {
+            mToolsUi->close_button->hide();
+            mToolsUi->minimize_button->hide();
+        }
     }
 
     if (inWindowNav()) {
@@ -964,6 +967,11 @@ void ToolWindow::createWindowNavColumn() {
         return;
     }
     mWindowNavColumn = new QWidget(mEmulatorWindow->containerWindow());
+    mWindowNavColumn->setObjectName(QStringLiteral("windowNavColumn"));
+    mWindowNavColumn->setStyleSheet(QStringLiteral(
+            "#windowNavColumn { background: #000000; }"
+            "#windowNavColumn QPushButton { background: #000000; color: #ffffff; border: 0; }"
+            "#windowNavColumn QPushButton:hover, #windowNavColumn QPushButton:pressed { background: #333333; }"));
     mWindowNavColumn->setFocusPolicy(Qt::NoFocus);
     auto* layout = new QVBoxLayout(mWindowNavColumn);
     layout->setContentsMargins(10, 0, 10, 0);
@@ -995,7 +1003,6 @@ void ToolWindow::createWindowNavColumn() {
                                                  : mToolsUi->home_button,
               &ToolWindow::on_home_button_pressed,
               &ToolWindow::on_home_button_released);
-    layout->addStretch(1);
     mWindowNavColumn->show();
     positionWindowNavColumn();
 }
@@ -1006,7 +1013,7 @@ void ToolWindow::positionWindowNavColumn() {
     }
     auto* container = mEmulatorWindow->containerWindow();
     const QRect vr = container->viewport()->geometry();
-    mWindowNavColumn->setGeometry(vr.right() - 53, vr.top(), 54, vr.height());
+    mWindowNavColumn->setGeometry(vr.right() + 1, vr.top(), 54, vr.height());
     mWindowNavColumn->raise();
 }
 

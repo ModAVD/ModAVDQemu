@@ -25,6 +25,8 @@
 #include <QScrollBar>     // for QScrollBar
 #include <QStyle>         // for QStyle
 #include <QStyleFactory>  // for QStyleFactory
+#include <QStyleHints>
+#include <QTimer>
 #include <QVector2D>      // for QVector2D
 #include <algorithm>      // for min, find, max
 #include <functional>     // for __base
@@ -437,13 +439,30 @@ void EmulatorContainer::resizeEvent(QResizeEvent* event) {
 
 bool EmulatorContainer::viewportEvent(QEvent* event) {
     const bool handled = QScrollArea::viewportEvent(event);
-    if (event->type() == QEvent::Resize) {
+    if (event->type() == QEvent::Resize && ToolWindow::inWindowNav() &&
+        mEmulatorWindow->toolWindow()) {
         mEmulatorWindow->toolWindow()->dockMainWindow();
     }
     return handled;
 }
 
 void EmulatorContainer::showEvent(QShowEvent* event) {
+#ifdef _WIN32
+    if (ToolWindow::inWindowNav()) {
+        setDarkTitleBar(effectiveWinId());
+        if (!mDarkTitleBarConnected) {
+            mDarkTitleBarConnected = true;
+            QObject::connect(QGuiApplication::styleHints(),
+                             &QStyleHints::colorSchemeChanged, this, [this] {
+                                 QTimer::singleShot(0, this, [this] {
+                                     if (ToolWindow::inWindowNav()) {
+                                         setDarkTitleBar(effectiveWinId());
+                                     }
+                                 });
+                             });
+        }
+    }
+#endif
 // Disable the minimize and maximize buttons on OSX. See the comment in the
 // constructor for an explanation of why this is necessary.
 #ifdef __APPLE__

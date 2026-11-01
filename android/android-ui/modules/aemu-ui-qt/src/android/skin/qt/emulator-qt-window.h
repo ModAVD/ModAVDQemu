@@ -751,13 +751,11 @@ private:
     enum class SafeShutdownState {
         Idle,
         StoppingGuest,
-        GuestStopped,
         Syncing,
         Forced,
     };
     SafeShutdownState mSafeShutdownState = SafeShutdownState::Idle;
     QTimer mSafeShutdownTimeout;
-    QTimer mSafeShutdownGraceTimer;
 
     bool mSkinRemoved{false};
     bool mFrameAlways;  // true = no floating emulator

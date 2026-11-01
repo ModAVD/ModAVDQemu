@@ -116,6 +116,7 @@ private:
     QList<QEvent::Type> mEventBuffer;
     QTimer mResizeTimer;
     bool mRotating = false;
+    bool mDarkTitleBarConnected = false;
     std::unique_ptr<android::base::RaiiEventListener<
             android::DisplayPowerModeNotificationSupport,
             android::DisplayPowerModeChangeEvent>>
