@@ -49,6 +49,7 @@
 #include <QPoint>
 #include <QPushButton>
 #include <QRect>
+#include <QScrollArea>
 #include <QScreen>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -273,7 +274,13 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
 #else
     Qt::WindowFlags flag = Qt::Tool;
 #endif
-    setWindowFlags(flag | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+    if (leanToolbar()) {
+        setWindowFlags(Qt::Widget | Qt::FramelessWindowHint |
+                       Qt::NoDropShadowWindowHint);
+    } else {
+        setWindowFlags(flag | Qt::FramelessWindowHint |
+                       Qt::NoDropShadowWindowHint);
+    }
     mToolsUi->setupUi(this);
 
     const AvdInfo* avdInfo = getConsoleAgents()->settings->avdInfo();
@@ -660,7 +667,6 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
         // Hide everything else; all_apps_button remains the home button for
         // AVDs that use AllAppsForHomeTray.
         const QPushButton* keep[] = {
-                mToolsUi->close_button,    mToolsUi->minimize_button,
                 mToolsUi->back_button,     mToolsUi->home_button,
                 mToolsUi->all_apps_button,
         };
@@ -704,6 +710,8 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
         mToolsUi->back_button->setToolTip(QString::fromUtf8("返回"));
         mToolsUi->home_button->setToolTip(QString::fromUtf8("主页"));
         mToolsUi->all_apps_button->setToolTip(QString::fromUtf8("主页"));
+        mToolsUi->close_button->hide();
+        mToolsUi->minimize_button->hide();
     }
 
     sToolWindow = this;
@@ -1621,12 +1629,16 @@ void ToolWindow::closeExtendedWindow() {
 
 void ToolWindow::dockMainWindow() {
     if (leanToolbar()) {
-        const int toolbarHeight = std::max(
-                1, parentWidget()->height() -
-                           mEmulatorWindow->getTopTransparency() -
-                           mEmulatorWindow->getBottomTransparency());
-        if (height() != toolbarHeight) {
-            setFixedHeight(toolbarHeight);
+        const int toolbarWidth = std::max(1, sizeHint().width());
+        auto* area = qobject_cast<QScrollArea*>(parentWidget());
+        if (area) {
+            if (auto* container = qobject_cast<EmulatorContainer*>(area)) {
+                container->setLeanToolbarWidth(toolbarWidth);
+            }
+            setGeometry(area->width() - toolbarWidth, 0, toolbarWidth,
+                        area->height());
+            raise();
+            return;
         }
     }
 
@@ -1650,6 +1662,18 @@ void ToolWindow::dockMainWindow() {
     });
     mVirtualSceneControlWindow.ifExists(
             [&] { mVirtualSceneControlWindow.get()->dockMainWindow(offset); });
+}
+
+bool ToolWindow::isLeanToolbar() const {
+    return leanToolbar();
+}
+
+int ToolWindow::leanToolbarWidth() const {
+    return leanToolbar() ? std::max(1, sizeHint().width()) : 0;
+}
+
+bool ToolWindow::safeShutdownInProgress() const {
+    return mEmulatorWindow && mEmulatorWindow->safeShutdownInProgress();
 }
 
 void ToolWindow::raiseMainWindow() {
@@ -1901,11 +1925,13 @@ bool ToolWindow::shouldClose() {
 }
 
 void ToolWindow::on_close_button_clicked() {
-    if (leanToolbar() && mSafeShutdownInProgress) {
-        const auto answer = QMessageBox::question(
-                this, QString::fromUtf8("正在关机"),
-                QString::fromUtf8("强制关闭？最近几秒写入的数据可能丢失"),
-                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (leanToolbar() && mEmulatorWindow->safeShutdownInProgress()) {
+        QMessageBox box(QMessageBox::Question, QString::fromUtf8("正在关机"),
+                        QString::fromUtf8("强制关闭？最近几秒写入的数据可能丢失"),
+                        QMessageBox::Yes | QMessageBox::No, this);
+        box.button(QMessageBox::Yes)->setText(QString::fromUtf8("是"));
+        box.button(QMessageBox::No)->setText(QString::fromUtf8("否"));
+        const auto answer = box.exec();
         if (answer == QMessageBox::Yes) {
             mEmulatorWindow->forceCloseNow();
         }
@@ -1922,11 +1948,9 @@ void ToolWindow::on_close_button_clicked() {
             return;
         }
 
-        mSafeShutdownInProgress = true;
         for (QPushButton* button : findChildren<QPushButton*>()) {
-            button->setEnabled(button == mToolsUi->close_button);
+            button->setEnabled(false);
         }
-        mToolsUi->close_button->setToolTip(QString::fromUtf8("正在关机…"));
         mEmulatorWindow->startSafeShutdown();
         return;
     }

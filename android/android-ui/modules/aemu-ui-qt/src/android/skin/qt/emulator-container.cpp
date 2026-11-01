@@ -17,6 +17,7 @@
 #include <qnamespace.h>   // for WindowMinimized
 #include <qwindowdefs.h>  // for WId
 #include <QFlags>         // for QFlags
+#include <QByteArray>      // for qgetenv
 #include <QFrame>         // for QFrame
 #include <QMoveEvent>     // for QMoveEvent
 #include <QObject>        // for QObject
@@ -76,7 +77,11 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
 #ifdef __APPLE__
     setWindowFlags(Qt::WindowTitleHint | Qt::Window);
 #else
-    setWindowFlags(Qt::WindowTitleHint | Qt::Window | Qt::CustomizeWindowHint);
+    const bool lean = qgetenv("ANDROID_EMU_FULL_TOOLBAR") != "1";
+    setWindowFlags(Qt::WindowTitleHint | Qt::Window | Qt::CustomizeWindowHint |
+                   (lean ? (Qt::WindowMinimizeButtonHint |
+                            Qt::WindowCloseButtonHint)
+                         : Qt::WindowFlags()));
 #endif
 
 #ifdef __APPLE__

@@ -69,6 +69,8 @@ public:
     void stopResizeTimer();
     QSize viewportSize() const;
 
+    void setLeanToolbarWidth(int width) { setViewportMargins(0, 0, width, 0); }
+
     void prepareForRotation() { mRotating = true; }
 
     Ui::OverlayMessageCenter& messageCenter();

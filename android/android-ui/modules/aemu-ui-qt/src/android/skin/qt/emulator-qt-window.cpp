@@ -1195,10 +1195,20 @@ void EmulatorQtWindow::slot_gpuWarningMessageAccepted() {
 }
 
 void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
-    if (mToolWindow && mToolWindow->safeShutdownInProgress()) {
+    if (mToolWindow && isMainThreadRunning() &&
+        mToolWindow->safeShutdownInProgress()) {
         mToolWindow->on_close_button_clicked();
         event->ignore();
         return;
+    }
+
+    if (!isMainThreadRunning()) {
+        if (auto* modal = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+            modal->done(QMessageBox::No);
+        }
+        mSafeShutdownTimeout.stop();
+        mSafeShutdownGraceTimer.stop();
+        mSafeShutdownState = SafeShutdownState::Idle;
     }
 
     // make sure to use the close button on tool window
@@ -1730,6 +1740,12 @@ void EmulatorQtWindow::maskWindowFrame() {
 
     flags &= ~FRAME_WINDOW_FLAGS_MASK;
     flags |= (haveFrame ? FRAMED_WINDOW_FLAGS : FRAMELESS_WINDOW_FLAGS);
+#ifdef _WIN32
+    if (mToolWindow && mToolWindow->isLeanToolbar() && haveFrame) {
+        flags |= Qt::WindowMinimizeButtonHint | Qt::WindowCloseButtonHint;
+        flags &= ~Qt::WindowMaximizeButtonHint;
+    }
+#endif
 
     mContainer.setWindowFlags(flags);
 
@@ -4513,7 +4529,7 @@ void EmulatorQtWindow::startSafeShutdown() {
     }
 
     auto command = adb->runAdbCommand(
-            {"shell", "stop"},
+            {"shell", "su", "0", "setprop", "sys.powerctl", "shutdown"},
             [this](const android::emulation::OptionalAdbCommandResult& result) {
                 const bool success = result && result->exit_code == 0;
                 QMetaObject::invokeMethod(
@@ -4530,10 +4546,7 @@ void EmulatorQtWindow::startSafeShutdown() {
                                 return;
                             }
 
-                            mSafeShutdownState = SafeShutdownState::GuestStopped;
-                            mSafeShutdownTimeout.stop();
-                            queueQuitEvent();
-                            mSafeShutdownGraceTimer.start();
+                            LOG(INFO) << "Guest shutdown command accepted; waiting for Android to power off";
                         },
                         Qt::QueuedConnection);
             },
@@ -4593,7 +4606,7 @@ void EmulatorQtWindow::forceCloseNow() {
     mSafeShutdownTimeout.stop();
     mSafeShutdownGraceTimer.stop();
     queueQuitEvent();
-    System::get()->waitAndKillSelf();
+    System::get()->waitAndKillSelf(3);
 }
 
 void EmulatorQtWindow::runAdbShellPowerDownAndQuit() {
