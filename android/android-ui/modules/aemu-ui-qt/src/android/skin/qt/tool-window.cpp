@@ -217,6 +217,14 @@ static bool leanToolbar() {
     return lean;
 }
 
+bool ToolWindow::inWindowNav() {
+#ifdef _WIN32
+    return leanToolbar() && !getConsoleAgents()->settings->android_cmdLineOptions()->qt_hide_window;
+#else
+    return false;
+#endif
+}
+
 template <typename T>
 ToolWindow::WindowHolder<T>::WindowHolder(ToolWindow* tw,
                                           OnCreatedCallback onCreated)
@@ -274,13 +282,7 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
 #else
     Qt::WindowFlags flag = Qt::Tool;
 #endif
-    if (leanToolbar()) {
-        setWindowFlags(Qt::Widget | Qt::FramelessWindowHint |
-                       Qt::NoDropShadowWindowHint);
-    } else {
-        setWindowFlags(flag | Qt::FramelessWindowHint |
-                       Qt::NoDropShadowWindowHint);
-    }
+    setWindowFlags(flag | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
     mToolsUi->setupUi(this);
 
     const AvdInfo* avdInfo = getConsoleAgents()->settings->avdInfo();
@@ -714,6 +716,10 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
         mToolsUi->minimize_button->hide();
     }
 
+    if (inWindowNav()) {
+        createWindowNavColumn();
+    }
+
     sToolWindow = this;
     skin_winsys_touch_qt_extended_virtual_sensors();
 
@@ -921,7 +927,7 @@ void ToolWindow::hideEvent(QHideEvent*) {
 }
 
 void ToolWindow::show() {
-    QFrame::show();
+    setVisible(true);
     if (leanToolbar()) {
         setFixedWidth(sizeHint().width());
     } else {
@@ -941,6 +947,87 @@ void ToolWindow::show() {
     }
 }
 
+void ToolWindow::setVisible(bool visible) {
+    if (inWindowNav()) {
+        QFrame::setVisible(false);
+        if (mWindowNavColumn) {
+            mWindowNavColumn->setVisible(true);
+            positionWindowNavColumn();
+        }
+        return;
+    }
+    QFrame::setVisible(visible);
+}
+
+void ToolWindow::createWindowNavColumn() {
+    if (mWindowNavColumn) {
+        return;
+    }
+    mWindowNavColumn = new QWidget(mEmulatorWindow->containerWindow());
+    mWindowNavColumn->setFocusPolicy(Qt::NoFocus);
+    auto* layout = new QVBoxLayout(mWindowNavColumn);
+    layout->setContentsMargins(10, 0, 10, 0);
+    layout->setSpacing(0);
+    layout->addStretch(1);
+
+    auto addButton = [&](QPushButton* source, auto pressed, auto released) {
+        if (source->isHidden()) {
+            return;
+        }
+        auto* button = new QPushButton(mWindowNavColumn);
+        button->setObjectName(QStringLiteral("windowNavButton"));
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setFixedSize(34, 34);
+        button->setIcon(source->icon());
+        button->setIconSize(source->iconSize());
+        button->setProperty("themeIconName", source->property("themeIconName"));
+        button->setProperty("ToolWindowButton", true);
+        button->setProperty("iconSize", source->iconSize());
+        button->setProperty("minimumSize", QSize(34, 34));
+        button->setToolTip(source->toolTip());
+        QObject::connect(button, &QPushButton::pressed, this, pressed);
+        QObject::connect(button, &QPushButton::released, this, released);
+        layout->addWidget(button, 0, Qt::AlignHCenter);
+    };
+    addButton(mToolsUi->back_button, &ToolWindow::on_back_button_pressed,
+              &ToolWindow::on_back_button_released);
+    addButton(mToolsUi->home_button->isHidden() ? mToolsUi->all_apps_button
+                                                 : mToolsUi->home_button,
+              &ToolWindow::on_home_button_pressed,
+              &ToolWindow::on_home_button_released);
+    layout->addStretch(1);
+    mWindowNavColumn->show();
+    positionWindowNavColumn();
+}
+
+void ToolWindow::positionWindowNavColumn() {
+    if (!mWindowNavColumn || !inWindowNav()) {
+        return;
+    }
+    auto* container = mEmulatorWindow->containerWindow();
+    const QRect vr = container->viewport()->geometry();
+    mWindowNavColumn->setGeometry(vr.right() - 53, vr.top(), 54, vr.height());
+    mWindowNavColumn->raise();
+}
+
+void ToolWindow::syncWindowNavEnabled() {
+    if (mWindowNavColumn) {
+        mWindowNavColumn->setEnabled(isEnabled());
+        if (safeShutdownInProgress()) {
+            for (QPushButton* button : mWindowNavColumn->findChildren<QPushButton*>()) {
+                button->setEnabled(false);
+            }
+        }
+    }
+}
+
+void ToolWindow::changeEvent(QEvent* event) {
+    QFrame::changeEvent(event);
+    if (event->type() == QEvent::EnabledChange) {
+        syncWindowNavEnabled();
+    }
+}
+
 bool ToolWindow::needExtendedWindow(QtUICommand cmd) const {
     switch (cmd) {
         case QtUICommand::HOME:
@@ -953,6 +1040,7 @@ bool ToolWindow::needExtendedWindow(QtUICommand cmd) const {
         case QtUICommand::VOLUME_UP:
         case QtUICommand::GLASSES:
         case QtUICommand::TOGGLE_MICROPHONE:
+        case QtUICommand::ALL_APPS:
             return false;
         default:
             return true;
@@ -1628,17 +1716,21 @@ void ToolWindow::closeExtendedWindow() {
 }
 
 void ToolWindow::dockMainWindow() {
-    if (leanToolbar()) {
-        const int toolbarWidth = std::max(1, sizeHint().width());
-        auto* area = qobject_cast<QScrollArea*>(parentWidget());
-        if (area) {
-            if (auto* container = qobject_cast<EmulatorContainer*>(area)) {
-                container->setLeanToolbarWidth(toolbarWidth);
-            }
-            setGeometry(area->width() - toolbarWidth, 0, toolbarWidth,
-                        area->height());
-            raise();
-            return;
+    if (inWindowNav()) {
+        const int toolbarWidth = 54;
+        if (auto* area = qobject_cast<EmulatorContainer*>(parentWidget())) {
+            area->setLeanToolbarWidth(toolbarWidth);
+            const QRect frame = area->frameGeometry();
+            move(frame.right() + TOOL_GAP_FRAMED - width() + 1,
+                 frame.top() + mEmulatorWindow->getTopTransparency());
+            positionWindowNavColumn();
+        }
+    } else if (leanToolbar()) {
+        const int toolbarHeight = std::max(1, parentWidget()->height() -
+                                                   mEmulatorWindow->getTopTransparency() -
+                                                   mEmulatorWindow->getBottomTransparency());
+        if (height() != toolbarHeight) {
+            setFixedHeight(toolbarHeight);
         }
     }
 
@@ -1669,7 +1761,7 @@ bool ToolWindow::isLeanToolbar() const {
 }
 
 int ToolWindow::leanToolbarWidth() const {
-    return leanToolbar() ? std::max(1, sizeHint().width()) : 0;
+    return inWindowNav() ? 54 : (leanToolbar() ? std::max(1, sizeHint().width()) : 0);
 }
 
 bool ToolWindow::safeShutdownInProgress() const {
@@ -1687,6 +1779,10 @@ void ToolWindow::updateTheme(const QString& styleSheet) {
     mTouchpadWindow.ifExists(
             [&] { mTouchpadWindow.get()->setStyleSheet(styleSheet); });
     setStyleSheet(styleSheet);
+    if (mWindowNavColumn) {
+        mWindowNavColumn->setStyleSheet(styleSheet);
+        remaskButtons();
+    }
 }
 
 // static
@@ -1855,7 +1951,8 @@ bool ToolWindow::askWhetherToSaveSnapshot() {
 
     int64_t startTime = get_uptime_ms();
     QMessageBox msgBox(QMessageBox::Question, tr("Save quick-boot state"),
-                       askMessage, (QMessageBox::Yes | QMessageBox::No), this);
+                       askMessage, (QMessageBox::Yes | QMessageBox::No),
+                       mEmulatorWindow->containerWindow());
     // Add a Cancel button to enable the MessageBox's X.
     // Since embedded has already disconnected by this point, we always assume shutdown.
     if(!getConsoleAgents()
@@ -1928,7 +2025,8 @@ void ToolWindow::on_close_button_clicked() {
     if (leanToolbar() && mEmulatorWindow->safeShutdownInProgress()) {
         QMessageBox box(QMessageBox::Question, QString::fromUtf8("正在关机"),
                         QString::fromUtf8("强制关闭？最近几秒写入的数据可能丢失"),
-                        QMessageBox::Yes | QMessageBox::No, this);
+                        QMessageBox::Yes | QMessageBox::No,
+                        mEmulatorWindow->containerWindow());
         box.button(QMessageBox::Yes)->setText(QString::fromUtf8("是"));
         box.button(QMessageBox::No)->setText(QString::fromUtf8("否"));
         const auto answer = box.exec();
@@ -1950,6 +2048,11 @@ void ToolWindow::on_close_button_clicked() {
 
         for (QPushButton* button : findChildren<QPushButton*>()) {
             button->setEnabled(false);
+        }
+        if (mWindowNavColumn) {
+            for (QPushButton* button : mWindowNavColumn->findChildren<QPushButton*>()) {
+                button->setEnabled(false);
+            }
         }
         mEmulatorWindow->startSafeShutdown();
         return;
@@ -2805,7 +2908,11 @@ WorkerProcessingResult ToolWindow::foldableSyncToAndroidItemFunction(
 }
 
 void ToolWindow::remaskButtons() {
-    for (QPushButton* button : findChildren<QPushButton*>()) {
+    QList<QPushButton*> buttons = findChildren<QPushButton*>();
+    if (mWindowNavColumn) {
+        buttons += mWindowNavColumn->findChildren<QPushButton*>();
+    }
+    for (QPushButton* button : buttons) {
         const QString icon_name = button->property("themeIconName").toString();
         if (!icon_name.isNull()) {
             double dpr = 1.0;

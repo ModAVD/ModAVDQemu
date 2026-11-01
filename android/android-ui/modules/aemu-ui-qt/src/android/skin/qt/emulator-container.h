@@ -62,6 +62,7 @@ public:
     void moveEvent(QMoveEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    bool viewportEvent(QEvent* event) override;
 
     void show();
     void showMinimized();

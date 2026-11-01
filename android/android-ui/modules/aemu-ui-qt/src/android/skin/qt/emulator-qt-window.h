@@ -242,13 +242,14 @@ public:
     void startSafeShutdown();
     void forceCloseNow();
     bool safeShutdownInProgress() const;
+    EmulatorContainer* containerWindow();
+    QSize guestAreaSize() const;
     bool isInZoomMode() const;
     bool isWindowMinimized() const { return mWindowIsMinimized; }
     ToolWindow* toolWindow() const;
     CarClusterWindow* carClusterWindow() const;
     CarClusterConnector* carClusterConnector() const;
 
-    EmulatorContainer* containerWindow();
     void showZoomIfNotUserHidden();
     QSize containerSize() const;
     QRect deviceGeometry() const;

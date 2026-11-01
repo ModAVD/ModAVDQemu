@@ -25,6 +25,7 @@
 #include <QRect>
 #include <QString>
 #include <QWidget>
+#include <QPushButton>
 #include <QTimer>
 
 #include "aemu/base/Compiler.h"
@@ -97,6 +98,7 @@ public:
     void allowExtWindowCreation();
     void hide();
     void show();
+    void setVisible(bool visible) override;
     void dockMainWindow();
     void raiseMainWindow();
     void updateTheme(const QString& styleSheet);
@@ -145,6 +147,7 @@ public:
 
     bool isLeanToolbar() const;
     int leanToolbarWidth() const;
+    static bool inWindowNav();
 
     bool clipboardSharingSupported() const { return mClipboardSupported; }
     void forwardKeyToEmulator(uint32_t keycode, bool down);
@@ -211,10 +214,14 @@ private:
     void updateRightHandButton(const QString& gesture);
 
     virtual void closeEvent(QCloseEvent* ce) override;
+    void changeEvent(QEvent* event) override;
     virtual void mousePressEvent(QMouseEvent* event) override;
     virtual void paintEvent(QPaintEvent*) override;
     virtual void hideEvent(QHideEvent* event) override;
     void rebuildBackingStoreIfStale();
+    void createWindowNavColumn();
+    void positionWindowNavColumn();
+    void syncWindowNavEnabled();
 
     EmulatorQtWindow* mEmulatorWindow;
     android::base::MemberOnDemandT<ExtendedWindowHolder,
@@ -231,6 +238,7 @@ private:
                                    void (ToolWindow::*)(TouchpadWindow*)>
             mTouchpadWindow;
     std::unique_ptr<Ui::ToolControls> mToolsUi;
+    QWidget* mWindowNavColumn = nullptr;
     bool mStartedAdbStopProcess = false;
     ShortcutKeyStore<QtUICommand> mShortcutKeyStore;
     bool mIsExtendedWindowVisibleOnShow = false;

@@ -77,9 +77,10 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
 #ifdef __APPLE__
     setWindowFlags(Qt::WindowTitleHint | Qt::Window);
 #else
-    const bool lean = qgetenv("ANDROID_EMU_FULL_TOOLBAR") != "1";
+    const bool lean = ToolWindow::inWindowNav();
     setWindowFlags(Qt::WindowTitleHint | Qt::Window | Qt::CustomizeWindowHint |
-                   (lean ? (Qt::WindowMinimizeButtonHint |
+                   (lean ? (Qt::WindowSystemMenuHint |
+                            Qt::WindowMinimizeButtonHint |
                             Qt::WindowCloseButtonHint)
                          : Qt::WindowFlags()));
 #endif
@@ -224,7 +225,7 @@ bool EmulatorContainer::event(QEvent* e) {
 #endif
             // clear() deallocates internal buffer, but we need it.
             mEventBuffer.erase(mEventBuffer.begin(), mEventBuffer.end());
-            mEmulatorWindow->doResize(this->size());
+            mEmulatorWindow->doResize(mEmulatorWindow->guestAreaSize());
 
             // Kill the resize timer to avoid double resizes.
             stopResizeTimer();
@@ -341,6 +342,12 @@ void EmulatorContainer::closeEvent(QCloseEvent* event) {
         return;
     }
 
+    if (mEmulatorWindow->isMainThreadRunning() &&
+        mEmulatorWindow->safeShutdownInProgress()) {
+        mEmulatorWindow->closeEvent(event);
+        return;
+    }
+
     slot_hideModalOverlay();
     slot_hideVirtualSceneInfoDialog();
     mEmulatorWindow->closeEvent(event);
@@ -426,6 +433,14 @@ void EmulatorContainer::resizeEvent(QResizeEvent* event) {
         // has not entered the window again.
         startResizeTimer();
     }
+}
+
+bool EmulatorContainer::viewportEvent(QEvent* event) {
+    const bool handled = QScrollArea::viewportEvent(event);
+    if (event->type() == QEvent::Resize) {
+        mEmulatorWindow->toolWindow()->dockMainWindow();
+    }
+    return handled;
 }
 
 void EmulatorContainer::showEvent(QShowEvent* event) {
@@ -526,6 +541,10 @@ void EmulatorContainer::stopResizeTimer() {
 QSize EmulatorContainer::viewportSize() const {
     QSize output = this->size();
 
+    if (ToolWindow::inWindowNav()) {
+        output.rwidth() -= 54;
+    }
+
     QScrollBar* vertical = this->verticalScrollBar();
     output.setWidth(output.width() -
                     (vertical->isVisible() ? vertical->width() : 0));
@@ -570,7 +589,7 @@ void EmulatorContainer::slot_resizeDone() {
     // are held down. If there are, then the user must not be done resizing
     // yet.
     if (numHeldMouseButtons() == 0) {
-        mEmulatorWindow->doResize(this->size());
+        mEmulatorWindow->doResize(mEmulatorWindow->guestAreaSize());
     } else {
         startResizeTimer();
     }

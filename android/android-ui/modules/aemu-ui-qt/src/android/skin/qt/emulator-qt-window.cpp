@@ -746,6 +746,9 @@ EmulatorQtWindow::EmulatorQtWindow(QWidget* parent)
             FramelessDetector::isFramelessOk()
                     ? settings.value(Ui::Settings::FRAME_ALWAYS, false).toBool()
                     : true;
+    if (ToolWindow::inWindowNav()) {
+        mFrameAlways = true;
+    }
     mPreviouslyFramed = mFrameAlways;
 
     mToolWindow = new ToolWindow(this, &mContainer, mEventLogger,
@@ -1447,9 +1450,15 @@ void EmulatorQtWindow::updateWindowTitle() {
         QString title = QString("[Mouse captured, press %1 to release] %2")
             .arg(releaseMouseShortcutName())
             .arg(mBaseWindowTitle);
+        if (safeShutdownInProgress()) {
+            title += QString::fromUtf8("（正在关机…）");
+        }
         mContainer.setWindowTitle(title);
     } else {
-        mContainer.setWindowTitle(mBaseWindowTitle);
+        mContainer.setWindowTitle(mBaseWindowTitle +
+                                  (safeShutdownInProgress()
+                                           ? QString::fromUtf8("（正在关机…）")
+                                           : QString()));
     }
 }
 
@@ -1741,13 +1750,16 @@ void EmulatorQtWindow::maskWindowFrame() {
     flags &= ~FRAME_WINDOW_FLAGS_MASK;
     flags |= (haveFrame ? FRAMED_WINDOW_FLAGS : FRAMELESS_WINDOW_FLAGS);
 #ifdef _WIN32
-    if (mToolWindow && mToolWindow->isLeanToolbar() && haveFrame) {
-        flags |= Qt::WindowMinimizeButtonHint | Qt::WindowCloseButtonHint;
+    if (ToolWindow::inWindowNav() && haveFrame) {
+        flags |= Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint |
+                 Qt::WindowCloseButtonHint;
         flags &= ~Qt::WindowMaximizeButtonHint;
     }
 #endif
 
-    mContainer.setWindowFlags(flags);
+    if (mContainer.windowFlags() != flags) {
+        mContainer.setWindowFlags(flags);
+    }
 
     // Re-generate and apply the mask
     if (haveFrame) {
@@ -2590,6 +2602,9 @@ void EmulatorQtWindow::slot_setWindowPos(int x, int y, QSemaphore* semaphore) {
 
 void EmulatorQtWindow::slot_setWindowSize(int w, int h, QSemaphore* semaphore) {
     QSemaphoreReleaser semReleaser(semaphore);
+    if (ToolWindow::inWindowNav()) {
+        w += 54;
+    }
     mContainer.resize(w, h);
 }
 
@@ -2670,16 +2685,18 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
     showNormal();
     setFixedSize(rect.size());
 
-    if (rect.width() < mContainer.minimumWidth() ||
+    const int guestMinimumWidth = mContainer.minimumWidth() -
+                                  (ToolWindow::inWindowNav() ? 54 : 0);
+    if (rect.width() < guestMinimumWidth ||
         rect.height() < mContainer.minimumHeight()) {
         // We're trying to go smaller than the container will allow.
         // Increase our size to the container's minimum.
         double horizIncreaseFactor =
-                (double)(mContainer.minimumWidth()) / rect.width();
+                (double)guestMinimumWidth / rect.width();
         double vertIncreaseFactor =
                 (double)(mContainer.minimumHeight()) / rect.height();
         if (horizIncreaseFactor > vertIncreaseFactor) {
-            rect.setWidth(mContainer.minimumWidth());
+            rect.setWidth(guestMinimumWidth);
             rect.setHeight((int)(horizIncreaseFactor * rect.height()));
         } else {
             rect.setWidth((int)(vertIncreaseFactor * rect.width()));
@@ -2693,7 +2710,11 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
         mContainer.stopResizeTimer();
         recenterFocusPoint();
     } else if (!mNextIsZoom) {
-        mContainer.resize(rect.size());
+        QSize containerSize = rect.size();
+        if (ToolWindow::inWindowNav()) {
+            containerSize.rwidth() += 54;
+        }
+        mContainer.resize(containerSize);
     }
     mNextIsZoom = false;
 
@@ -2974,9 +2995,12 @@ void EmulatorQtWindow::doResize(const QSize& size, bool isKbdShortcut) {
         QRect screenDimensions;
         slot_getScreenDimensions(&screenDimensions);
 
-        if (newSize.width() > screenDimensions.width() ||
+        const int screenWidth = screenDimensions.width() -
+                                (ToolWindow::inWindowNav() ? 54 : 0);
+        if (newSize.width() > screenWidth ||
             newSize.height() > screenDimensions.height()) {
-            newSize.scale(screenDimensions.size(), Qt::KeepAspectRatio);
+            newSize.scale(QSize(screenWidth, screenDimensions.height()),
+                          Qt::KeepAspectRatio);
         }
     }
 
@@ -3106,7 +3130,9 @@ void EmulatorQtWindow::resizeAndChangeAspectRatio(bool isFolded) {
     simulateSetScale(std::max(.2, (double)scale));
     QRect containerGeo = mContainer.geometry();
     mContainer.setGeometry(containerGeo.x(), containerGeo.y(),
-                           windowGeo.width(), windowGeo.height());
+                           windowGeo.width() +
+                                   (ToolWindow::inWindowNav() ? 54 : 0),
+                           windowGeo.height());
 }
 
 void EmulatorQtWindow::resizeAndChangeAspectRatio(int x,
@@ -3141,7 +3167,9 @@ void EmulatorQtWindow::resizeAndChangeAspectRatio(int x,
     simulateSetScale(std::max(.2, (double)scale));
     QRect containerGeo = mContainer.geometry();
     mContainer.setGeometry(containerGeo.x(), containerGeo.y(),
-                           windowGeo.width(), windowGeo.height());
+                           windowGeo.width() +
+                                   (ToolWindow::inWindowNav() ? 54 : 0),
+                           windowGeo.height());
 }
 
 SkinMouseButtonType EmulatorQtWindow::getSkinMouseButton(
@@ -4050,6 +4078,9 @@ bool EmulatorQtWindow::hasSkin() const {
 }
 
 bool EmulatorQtWindow::hasFrame() const {
+    if (ToolWindow::inWindowNav()) {
+        return true;
+    }
     if (mFrameAlways || mInZoomMode) {
         return true;
     }
@@ -4075,6 +4106,14 @@ CarClusterConnector* EmulatorQtWindow::carClusterConnector() const {
 
 EmulatorContainer* EmulatorQtWindow::containerWindow() {
     return &mContainer;
+}
+
+QSize EmulatorQtWindow::guestAreaSize() const {
+    QSize size = mContainer.size();
+    if (ToolWindow::inWindowNav()) {
+        size.rwidth() -= 54;
+    }
+    return size;
 }
 
 void EmulatorQtWindow::showZoomIfNotUserHidden() {
@@ -4104,19 +4143,20 @@ void EmulatorQtWindow::toggleZoomMode() {
         mContainer.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         mContainer.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-        doResize(mContainer.size());
+        doResize(guestAreaSize());
         mOverlay.hide();
     } else {
-        doResize(mContainer.size());
+        doResize(guestAreaSize());
         mOverlay.showForZoom();
     }
     maskWindowFrame();
 }
 
 void EmulatorQtWindow::recenterFocusPoint() {
-    mContainer.horizontalScrollBar()->setValue(mFocus.x() * width() -
+    const QSize viewport = mContainer.viewportSize();
+    mContainer.horizontalScrollBar()->setValue(mFocus.x() * viewport.width() -
                                                mViewportFocus.x());
-    mContainer.verticalScrollBar()->setValue(mFocus.y() * height() -
+    mContainer.verticalScrollBar()->setValue(mFocus.y() * viewport.height() -
                                              mViewportFocus.y());
 
     mFocus = QPointF();
@@ -4136,20 +4176,21 @@ void EmulatorQtWindow::saveZoomPoints(const QPoint& focus,
 }
 
 void EmulatorQtWindow::scaleDown() {
-    doResize(mContainer.size() / 1.1, true);
+    doResize(guestAreaSize() / 1.1, true);
 }
 
 void EmulatorQtWindow::scaleUp() {
-    doResize(mContainer.size() * 1.1, true);
+    doResize(guestAreaSize() * 1.1, true);
 }
 
 void EmulatorQtWindow::fixScale() {
-    doResize(mContainer.size(), true);
+    doResize(guestAreaSize(), true);
 }
 
 void EmulatorQtWindow::zoomIn() {
     zoomIn(QPoint(width() / 2, height() / 2),
-           QPoint(mContainer.width() / 2, mContainer.height() / 2));
+           QPoint(mContainer.viewportSize().width() / 2,
+                  mContainer.viewportSize().height() / 2));
 }
 
 void EmulatorQtWindow::zoomIn(const QPoint& focus,
@@ -4174,7 +4215,8 @@ void EmulatorQtWindow::zoomIn(const QPoint& focus,
 
 void EmulatorQtWindow::zoomOut() {
     zoomOut(QPoint(width() / 2, height() / 2),
-            QPoint(mContainer.width() / 2, mContainer.height() / 2));
+            QPoint(mContainer.viewportSize().width() / 2,
+                   mContainer.viewportSize().height() / 2));
 }
 
 void EmulatorQtWindow::zoomOut(const QPoint& focus,
@@ -4194,13 +4236,14 @@ void EmulatorQtWindow::zoomTo(const QPoint& focus, const QSize& rectSize) {
         return;
 
     saveZoomPoints(focus,
-                   QPoint(mContainer.width() / 2, mContainer.height() / 2));
+                   QPoint(mContainer.viewportSize().width() / 2,
+                          mContainer.viewportSize().height() / 2));
 
     // The below scale = x creates a skin equivalent to calling "window
     // scale x" through the emulator console. At scale = 1, the device
     // should be at a 1:1 pixel mapping with the monitor. We allow going to
     // twice this size.
-    double scale = ((double)size().width() /
+    double scale = ((double)guestAreaSize().width() /
                     (double)mBackingSurface->bitmap->size().width());
 
     // Calculate the "ideal" zoom factor, which would perfectly frame this
@@ -4520,6 +4563,7 @@ void EmulatorQtWindow::startSafeShutdown() {
     }
 
     mSafeShutdownState = SafeShutdownState::StoppingGuest;
+    updateWindowTitle();
     mSafeShutdownTimeout.start();
     auto* adb = *mAdbInterface;
     if (!adb) {
@@ -4603,6 +4647,7 @@ void EmulatorQtWindow::forceCloseNow() {
         return;
     }
     mSafeShutdownState = SafeShutdownState::Forced;
+    updateWindowTitle();
     mSafeShutdownTimeout.stop();
     mSafeShutdownGraceTimer.stop();
     queueQuitEvent();
@@ -4990,7 +5035,7 @@ bool EmulatorQtWindow::addMultiDisplayWindow(uint32_t id,
             LOG(INFO) << "DisplayId: " << id << ", Title: " << tId;
             snprintf(title, 16, "Display %d", tId);
             mMultiDisplayWindow[id]->setWindowTitle(title);
-            QRect geoTool = mToolWindow->geometry();
+            QRect geoTool = mContainer.frameGeometry();
             mMultiDisplayWindow[id]->move(
                     geoTool.right() + (mMultiDisplayWindow.size() - 1) * 100,
                     geoTool.top());
