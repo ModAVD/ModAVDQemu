@@ -85,6 +85,9 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
                             Qt::WindowMinimizeButtonHint |
                             Qt::WindowCloseButtonHint)
                          : Qt::WindowFlags()));
+    if (lean) {
+        setStyleSheet(QStringLiteral("EmulatorContainer { background: #000000; }"));
+    }
 #endif
 
 #ifdef __APPLE__

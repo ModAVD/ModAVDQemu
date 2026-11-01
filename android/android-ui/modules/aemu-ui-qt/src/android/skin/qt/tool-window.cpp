@@ -999,10 +999,16 @@ void ToolWindow::createWindowNavColumn() {
     };
     addButton(mToolsUi->back_button, &ToolWindow::on_back_button_pressed,
               &ToolWindow::on_back_button_released);
-    addButton(mToolsUi->home_button->isHidden() ? mToolsUi->all_apps_button
-                                                 : mToolsUi->home_button,
-              &ToolWindow::on_home_button_pressed,
-              &ToolWindow::on_home_button_released);
+    QPushButton* homeSource = mToolsUi->home_button->isHidden()
+                                      ? mToolsUi->all_apps_button
+                                      : mToolsUi->home_button;
+    if (homeSource == mToolsUi->all_apps_button) {
+        addButton(homeSource, &ToolWindow::on_all_apps_button_pressed,
+                  &ToolWindow::on_all_apps_button_released);
+    } else {
+        addButton(homeSource, &ToolWindow::on_home_button_pressed,
+                  &ToolWindow::on_home_button_released);
+    }
     mWindowNavColumn->show();
     positionWindowNavColumn();
 }
