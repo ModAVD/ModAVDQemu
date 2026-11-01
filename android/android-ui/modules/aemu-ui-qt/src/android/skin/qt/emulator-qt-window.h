@@ -46,6 +46,7 @@
 #include <QPainter>
 #include <QProgressDialog>
 #include <QTabletEvent>
+#include <QTimer>
 #include <QWidget>
 
 #include <atomic>
@@ -238,6 +239,9 @@ public:
     WId getWindowId();
 
     android::emulation::AdbInterface* getAdbInterface() const;
+    void startSafeShutdown();
+    void forceCloseNow();
+    bool safeShutdownInProgress() const;
     bool isInZoomMode() const;
     bool isWindowMinimized() const { return mWindowIsMinimized; }
     ToolWindow* toolWindow() const;
@@ -557,6 +561,7 @@ private:
                      android::emulation::FilePusher::Result result);
 
     void runAdbShellPowerDownAndQuit();
+    void startSafeShutdownSync();
     void setVisibleExtent(QBitmap bitMap);
     Qt::CursorShape getCursorShape(bool mouseGrabbed);
 
@@ -741,6 +746,17 @@ private:
     QTimer mTrackpadAggregateTimer;
     std::unique_ptr<SwipeGesture> mSwipeGesture;
     bool mStartedAdbStopProcess;
+
+    enum class SafeShutdownState {
+        Idle,
+        StoppingGuest,
+        GuestStopped,
+        Syncing,
+        Forced,
+    };
+    SafeShutdownState mSafeShutdownState = SafeShutdownState::Idle;
+    QTimer mSafeShutdownTimeout;
+    QTimer mSafeShutdownGraceTimer;
 
     bool mSkinRemoved{false};
     bool mFrameAlways;  // true = no floating emulator

@@ -785,6 +785,23 @@ EmulatorQtWindow::EmulatorQtWindow(QWidget* parent)
                      &EmulatorQtWindow::slot_releaseBitmap);
     QObject::connect(this, &EmulatorQtWindow::requestClose, this,
                      &EmulatorQtWindow::slot_requestClose);
+    mSafeShutdownTimeout.setSingleShot(true);
+    mSafeShutdownTimeout.setInterval(15000);
+    QObject::connect(&mSafeShutdownTimeout, &QTimer::timeout, this, [this] {
+        if (mSafeShutdownState == SafeShutdownState::StoppingGuest) {
+            LOG(WARNING) << "Safe toolbar shutdown timed out; syncing guest";
+            startSafeShutdownSync();
+        }
+    });
+    mSafeShutdownGraceTimer.setSingleShot(true);
+    mSafeShutdownGraceTimer.setInterval(3000);
+    QObject::connect(&mSafeShutdownGraceTimer, &QTimer::timeout, this, [this] {
+        if (mSafeShutdownState == SafeShutdownState::GuestStopped &&
+            isMainThreadRunning()) {
+            LOG(WARNING) << "Guest is shut down but qemu did not exit; forcing exit";
+            forceCloseNow();
+        }
+    });
     QObject::connect(this, &EmulatorQtWindow::requestUpdate, this,
                      &EmulatorQtWindow::slot_requestUpdate);
     QObject::connect(this, &EmulatorQtWindow::setDeviceGeometry, this,
@@ -1178,6 +1195,12 @@ void EmulatorQtWindow::slot_gpuWarningMessageAccepted() {
 }
 
 void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
+    if (mToolWindow && mToolWindow->safeShutdownInProgress()) {
+        mToolWindow->on_close_button_clicked();
+        event->ignore();
+        return;
+    }
+
     // make sure to use the close button on tool window
     if (isMainThreadRunning() && !mToolWindow->closeButtonClicked()) {
         mToolWindow->on_close_button_clicked();
@@ -4468,6 +4491,109 @@ void EmulatorQtWindow::slot_adbWarningMessageAccepted() {
         QSettings settings;
         settings.setValue(Ui::Settings::SHOW_ADB_WARNING, false);
     }
+}
+
+bool EmulatorQtWindow::safeShutdownInProgress() const {
+    return mSafeShutdownState != SafeShutdownState::Idle &&
+           mSafeShutdownState != SafeShutdownState::Forced;
+}
+
+void EmulatorQtWindow::startSafeShutdown() {
+    if (mSafeShutdownState != SafeShutdownState::Idle) {
+        return;
+    }
+
+    mSafeShutdownState = SafeShutdownState::StoppingGuest;
+    mSafeShutdownTimeout.start();
+    auto* adb = *mAdbInterface;
+    if (!adb) {
+        LOG(WARNING) << "Safe toolbar shutdown has no ADB interface; syncing guest";
+        startSafeShutdownSync();
+        return;
+    }
+
+    auto command = adb->runAdbCommand(
+            {"shell", "stop"},
+            [this](const android::emulation::OptionalAdbCommandResult& result) {
+                const bool success = result && result->exit_code == 0;
+                QMetaObject::invokeMethod(
+                        this,
+                        [this, success] {
+                            if (mSafeShutdownState !=
+                                SafeShutdownState::StoppingGuest) {
+                                return;
+                            }
+                            if (!success) {
+                                LOG(WARNING)
+                                        << "Guest shutdown command failed; syncing guest";
+                                startSafeShutdownSync();
+                                return;
+                            }
+
+                            mSafeShutdownState = SafeShutdownState::GuestStopped;
+                            mSafeShutdownTimeout.stop();
+                            queueQuitEvent();
+                            mSafeShutdownGraceTimer.start();
+                        },
+                        Qt::QueuedConnection);
+            },
+            15000);
+    if (!command) {
+        LOG(WARNING) << "Safe toolbar shutdown command could not start; syncing guest";
+        startSafeShutdownSync();
+    }
+}
+
+void EmulatorQtWindow::startSafeShutdownSync() {
+    if (mSafeShutdownState == SafeShutdownState::Syncing ||
+        mSafeShutdownState == SafeShutdownState::Forced) {
+        return;
+    }
+
+    mSafeShutdownState = SafeShutdownState::Syncing;
+    mSafeShutdownTimeout.stop();
+    mSafeShutdownGraceTimer.stop();
+    auto* adb = *mAdbInterface;
+    if (!adb) {
+        LOG(WARNING) << "Safe toolbar shutdown could not run guest sync";
+        forceCloseNow();
+        return;
+    }
+
+    auto command = adb->runAdbCommand(
+            {"shell", "sync"},
+            [this](const android::emulation::OptionalAdbCommandResult& result) {
+                const bool success = result && result->exit_code == 0;
+                QMetaObject::invokeMethod(
+                        this,
+                        [this, success] {
+                            if (mSafeShutdownState != SafeShutdownState::Syncing) {
+                                return;
+                            }
+                            if (!success) {
+                                LOG(WARNING)
+                                        << "Safe toolbar shutdown guest sync failed; forcing exit";
+                            }
+                            forceCloseNow();
+                        },
+                        Qt::QueuedConnection);
+            },
+            2000);
+    if (!command) {
+        LOG(WARNING) << "Safe toolbar shutdown guest sync could not start; forcing exit";
+        forceCloseNow();
+    }
+}
+
+void EmulatorQtWindow::forceCloseNow() {
+    if (mSafeShutdownState == SafeShutdownState::Forced) {
+        return;
+    }
+    mSafeShutdownState = SafeShutdownState::Forced;
+    mSafeShutdownTimeout.stop();
+    mSafeShutdownGraceTimer.stop();
+    queueQuitEvent();
+    System::get()->waitAndKillSelf();
 }
 
 void EmulatorQtWindow::runAdbShellPowerDownAndQuit() {

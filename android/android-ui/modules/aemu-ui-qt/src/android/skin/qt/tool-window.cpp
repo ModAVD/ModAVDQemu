@@ -207,9 +207,7 @@ namespace fc = android::featurecontrol;
 namespace xr_service = android::xr::xr_service;
 
 // Instances here run unattended for automation, so the side toolbar keeps only
-// power, volume, back and home. No overview: the images run without the Pixel
-// launcher, which is what provides Recents, so the key did nothing and testers
-// took it for broken (10-16). ANDROID_EMU_FULL_TOOLBAR=1 shows the full
+// minimize, close, back and home. ANDROID_EMU_FULL_TOOLBAR=1 shows the full
 // toolbar again.
 static bool leanToolbar() {
     static const bool lean =
@@ -659,15 +657,12 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
     }
 
     if (leanToolbar()) {
-        // Hide everything else; the kept buttons stay as the AVD flavour
-        // left them (all_apps_button stands in for home with
-        // AllAppsForHomeTray). The layout is SetFixedSize, so the toolbar
-        // shrinks to the remaining buttons.
+        // Hide everything else; all_apps_button remains the home button for
+        // AVDs that use AllAppsForHomeTray.
         const QPushButton* keep[] = {
-                mToolsUi->close_button,       mToolsUi->minimize_button,
-                mToolsUi->power_button,       mToolsUi->volume_up_button,
-                mToolsUi->volume_down_button, mToolsUi->back_button,
-                mToolsUi->home_button,        mToolsUi->all_apps_button,
+                mToolsUi->close_button,    mToolsUi->minimize_button,
+                mToolsUi->back_button,     mToolsUi->home_button,
+                mToolsUi->all_apps_button,
         };
         for (QPushButton* button : findChildren<QPushButton*>()) {
             if (std::find(std::begin(keep), std::end(keep), button) ==
@@ -675,6 +670,40 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
                 button->setHidden(true);
             }
         }
+    }
+
+    if (leanToolbar()) {
+        // Let dockMainWindow() stretch the lean toolbar to the guest screen.
+        // Rebuild the button order so navigation stays at the bottom while
+        // the two window controls remain at the top.
+        mToolsUi->mainLayout->setSizeConstraint(QLayout::SetNoConstraint);
+        mToolsUi->controlsLayout->setSizeConstraint(QLayout::SetNoConstraint);
+        mToolsUi->mainLayout->setAlignment(Qt::AlignHCenter);
+        mToolsUi->controlsLayout->setAlignment(Qt::AlignHCenter);
+        setMinimumSize(0, 0);
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        const int toolbarWidth = sizeHint().width();
+        setMinimumWidth(toolbarWidth);
+        setMaximumWidth(toolbarWidth);
+
+        mToolsUi->winButtonsLayout->removeWidget(mToolsUi->close_button);
+        mToolsUi->winButtonsLayout->removeWidget(mToolsUi->minimize_button);
+        mToolsUi->winButtonsLayout->addWidget(mToolsUi->minimize_button);
+        mToolsUi->winButtonsLayout->addWidget(mToolsUi->close_button);
+
+        mToolsUi->controlsLayout->removeWidget(mToolsUi->back_button);
+        mToolsUi->controlsLayout->removeWidget(mToolsUi->home_button);
+        mToolsUi->controlsLayout->removeWidget(mToolsUi->all_apps_button);
+        mToolsUi->controlsLayout->addStretch(1);
+        mToolsUi->controlsLayout->addWidget(mToolsUi->back_button);
+        mToolsUi->controlsLayout->addWidget(mToolsUi->home_button);
+        mToolsUi->controlsLayout->addWidget(mToolsUi->all_apps_button);
+
+        mToolsUi->minimize_button->setToolTip(QString::fromUtf8("最小化"));
+        mToolsUi->close_button->setToolTip(QString::fromUtf8("关机"));
+        mToolsUi->back_button->setToolTip(QString::fromUtf8("返回"));
+        mToolsUi->home_button->setToolTip(QString::fromUtf8("主页"));
+        mToolsUi->all_apps_button->setToolTip(QString::fromUtf8("主页"));
     }
 
     sToolWindow = this;
@@ -885,7 +914,11 @@ void ToolWindow::hideEvent(QHideEvent*) {
 
 void ToolWindow::show() {
     QFrame::show();
-    setFixedSize(size());
+    if (leanToolbar()) {
+        setFixedWidth(sizeHint().width());
+    } else {
+        setFixedSize(size());
+    }
 
     if (mIsVirtualSceneWindowVisibleOnShow) {
         mVirtualSceneControlWindow.get()->show();
@@ -1587,6 +1620,16 @@ void ToolWindow::closeExtendedWindow() {
 }
 
 void ToolWindow::dockMainWindow() {
+    if (leanToolbar()) {
+        const int toolbarHeight = std::max(
+                1, parentWidget()->height() -
+                           mEmulatorWindow->getTopTransparency() -
+                           mEmulatorWindow->getBottomTransparency());
+        if (height() != toolbarHeight) {
+            setFixedHeight(toolbarHeight);
+        }
+    }
+
     // Align horizontally relative to the main window's frame.
     // Align vertically to its contents.
     // If we're frameless, adjust for a transparent border
@@ -1858,9 +1901,37 @@ bool ToolWindow::shouldClose() {
 }
 
 void ToolWindow::on_close_button_clicked() {
+    if (leanToolbar() && mSafeShutdownInProgress) {
+        const auto answer = QMessageBox::question(
+                this, QString::fromUtf8("正在关机"),
+                QString::fromUtf8("强制关闭？最近几秒写入的数据可能丢失"),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer == QMessageBox::Yes) {
+            mEmulatorWindow->forceCloseNow();
+        }
+        return;
+    }
+
     mIsExiting = true;
-    setEnabled(false);
     mCloseClicked = true;
+    if (leanToolbar()) {
+        if (!shouldClose()) {
+            mAskedWhetherToSaveSnapshot = false;
+            mIsExiting = false;
+            mCloseClicked = false;
+            return;
+        }
+
+        mSafeShutdownInProgress = true;
+        for (QPushButton* button : findChildren<QPushButton*>()) {
+            button->setEnabled(button == mToolsUi->close_button);
+        }
+        mToolsUi->close_button->setToolTip(QString::fromUtf8("正在关机…"));
+        mEmulatorWindow->startSafeShutdown();
+        return;
+    }
+
+    setEnabled(false);
     if (QGuiApplication::queryKeyboardModifiers().testFlag(Qt::ShiftModifier)) {
         // The user shift-clicked on the X
         // This counts as us asking and having the user say "don't save"
@@ -2733,6 +2804,9 @@ bool ToolWindow::eventFilter(QObject* o, QEvent* event) {
         // When moved across screens, masks on buttons need to
         // be adjusted according to screen density.
         remaskButtons();
+        if (leanToolbar()) {
+            dockMainWindow();
+        }
     } else if (event->type() == QEvent::WindowStateChange) {
         // It seems on mac, repainting after getting QEvent::ScreenChangeInternal is too early.
         // From experiments, asking for repaint after WindowStateChange will resize the tool-window

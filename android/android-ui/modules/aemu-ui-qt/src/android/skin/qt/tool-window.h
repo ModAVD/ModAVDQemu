@@ -141,6 +141,7 @@ public:
     bool shouldClose();
 
     bool closeButtonClicked() const { return mCloseClicked; }
+    bool safeShutdownInProgress() const { return mSafeShutdownInProgress; }
 
     bool clipboardSharingSupported() const { return mClipboardSupported; }
     void forwardKeyToEmulator(uint32_t keycode, bool down);
@@ -238,6 +239,7 @@ private:
     qreal mBackingStoreRebuiltDpr = 0;
 
     bool mIsExiting = false;
+    bool mSafeShutdownInProgress = false;
     bool mAskedWhetherToSaveSnapshot = false;
     bool mShouldClose = false;
     bool mAllowExtWindow = false;
