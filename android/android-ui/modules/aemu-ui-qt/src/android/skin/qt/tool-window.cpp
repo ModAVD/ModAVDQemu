@@ -969,11 +969,11 @@ void ToolWindow::createWindowNavColumn() {
     mWindowNavColumn = new QWidget(mEmulatorWindow->containerWindow());
     mWindowNavColumn->setObjectName(QStringLiteral("windowNavColumn"));
     mWindowNavColumn->setStyleSheet(QStringLiteral(
-            "#windowNavColumn { background: #E8E8E8; }"
-            "#windowNavColumn QPushButton { background: #E8E8E8; color: #141414; border: 0; }"
-            "#windowNavColumn QPushButton:hover { background: #D9D9D9; }"
-            "#windowNavColumn QPushButton:pressed { background: #CCCCCC; }"
-            "#windowNavColumn QPushButton:disabled { color: #A0A0A0; background: #E8E8E8; }"));
+            "#windowNavColumn { background: #20212D; }"
+            "#windowNavColumn QPushButton { background: #20212D; color: #E8E8EC; border: 0; }"
+            "#windowNavColumn QPushButton:hover { background: #303142; }"
+            "#windowNavColumn QPushButton:pressed { background: #3B3D52; }"
+            "#windowNavColumn QPushButton:disabled { color: #777985; background: #20212D; }"));
     mWindowNavColumn->setFocusPolicy(Qt::NoFocus);
     auto* layout = new QVBoxLayout(mWindowNavColumn);
     layout->setContentsMargins(10, 0, 10, 0);
@@ -1796,11 +1796,11 @@ void ToolWindow::updateTheme(const QString& styleSheet) {
     setStyleSheet(styleSheet);
     if (mWindowNavColumn) {
         mWindowNavColumn->setStyleSheet(QStringLiteral(
-                "#windowNavColumn { background: #E8E8E8; }"
-                "#windowNavColumn QPushButton { background: #E8E8E8; color: #141414; border: 0; }"
-                "#windowNavColumn QPushButton:hover { background: #D9D9D9; }"
-                "#windowNavColumn QPushButton:pressed { background: #CCCCCC; }"
-                "#windowNavColumn QPushButton:disabled { color: #A0A0A0; background: #E8E8E8; }"));
+                "#windowNavColumn { background: #20212D; }"
+                "#windowNavColumn QPushButton { background: #20212D; color: #E8E8EC; border: 0; }"
+                "#windowNavColumn QPushButton:hover { background: #303142; }"
+                "#windowNavColumn QPushButton:pressed { background: #3B3D52; }"
+                "#windowNavColumn QPushButton:disabled { color: #777985; background: #20212D; }"));
         remaskButtons();
     }
 }

@@ -39,12 +39,12 @@ void setDarkTitleBar(WId wid) {
         FreeLibrary(dwm);
         return;
     }
-    const BOOL dark = FALSE;
+    const BOOL dark = TRUE;
     if (FAILED(setAttr(reinterpret_cast<HWND>(wid), 20, &dark, sizeof(dark)))) {
         setAttr(reinterpret_cast<HWND>(wid), 19, &dark, sizeof(dark));
     }
-    const DWORD caption = 0x00e8e8e8;
-    const DWORD text = 0x00000000;
+    const DWORD caption = 0x002d2120;
+    const DWORD text = 0x00ece8e8;
     setAttr(reinterpret_cast<HWND>(wid), 35, &caption, sizeof(caption));
     setAttr(reinterpret_cast<HWND>(wid), 36, &text, sizeof(text));
     FreeLibrary(dwm);

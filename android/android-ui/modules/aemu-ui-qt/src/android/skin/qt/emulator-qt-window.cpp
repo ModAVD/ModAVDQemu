@@ -1197,6 +1197,9 @@ void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
     }
 
     if (!isMainThreadRunning()) {
+        if (auto* modal = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+            modal->close();
+        }
         mSafeShutdownTimeout.stop();
         if (mSafeShutdownState == SafeShutdownState::StoppingGuest ||
             mSafeShutdownState == SafeShutdownState::Syncing) {
@@ -1206,13 +1209,6 @@ void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
     }
 
     // make sure to use the close button on tool window
-    if (isMainThreadRunning() && !mToolWindow->closeButtonClicked() &&
-        !ToolWindow::inWindowNav()) {
-        mToolWindow->on_close_button_clicked();
-        event->ignore();
-        return;
-    }
-
     if (!mToolWindow->shouldClose()) {
         event->ignore();
         return;
@@ -1442,13 +1438,13 @@ void EmulatorQtWindow::updateWindowTitle() {
         QString title = QString("[Mouse captured, press %1 to release] %2")
             .arg(releaseMouseShortcutName())
             .arg(mBaseWindowTitle);
-        if (safeShutdownInProgress()) {
+        if (mSafeShutdownState != SafeShutdownState::Idle) {
             title += QString::fromUtf8("（正在关机…）");
         }
         mContainer.setWindowTitle(title);
     } else {
         mContainer.setWindowTitle(mBaseWindowTitle +
-                                  (safeShutdownInProgress()
+                                  (mSafeShutdownState != SafeShutdownState::Idle
                                            ? QString::fromUtf8("（正在关机…）")
                                            : QString()));
     }
@@ -2534,10 +2530,6 @@ void EmulatorQtWindow::slot_releaseBitmap(SkinSurface* s,
 }
 
 void EmulatorQtWindow::slot_requestClose(QSemaphore* semaphore) {
-    if (isMainThreadRunning() && !mToolWindow->closeButtonClicked() &&
-        !ToolWindow::inWindowNav()) {
-        mToolWindow->on_close_button_clicked();
-    }
     QSemaphoreReleaser semReleaser(semaphore);
     mToolWindow->shouldClose();
     if (isMainThreadRunning()) {
@@ -4180,9 +4172,10 @@ void EmulatorQtWindow::fixScale() {
 }
 
 void EmulatorQtWindow::zoomIn() {
+    const QSize area = ToolWindow::inWindowNav() ? mContainer.viewportSize()
+                                                 : mContainer.size();
     zoomIn(QPoint(width() / 2, height() / 2),
-           QPoint(mContainer.viewportSize().width() / 2,
-                  mContainer.viewportSize().height() / 2));
+           QPoint(area.width() / 2, area.height() / 2));
 }
 
 void EmulatorQtWindow::zoomIn(const QPoint& focus,
@@ -4206,9 +4199,10 @@ void EmulatorQtWindow::zoomIn(const QPoint& focus,
 }
 
 void EmulatorQtWindow::zoomOut() {
+    const QSize area = ToolWindow::inWindowNav() ? mContainer.viewportSize()
+                                                  : mContainer.size();
     zoomOut(QPoint(width() / 2, height() / 2),
-            QPoint(mContainer.viewportSize().width() / 2,
-                   mContainer.viewportSize().height() / 2));
+            QPoint(area.width() / 2, area.height() / 2));
 }
 
 void EmulatorQtWindow::zoomOut(const QPoint& focus,
@@ -4227,9 +4221,9 @@ void EmulatorQtWindow::zoomTo(const QPoint& focus, const QSize& rectSize) {
     if (!mBackingSurface)
         return;
 
-    saveZoomPoints(focus,
-                   QPoint(mContainer.viewportSize().width() / 2,
-                          mContainer.viewportSize().height() / 2));
+    const QSize area = ToolWindow::inWindowNav() ? mContainer.viewportSize()
+                                                  : mContainer.size();
+    saveZoomPoints(focus, QPoint(area.width() / 2, area.height() / 2));
 
     // The below scale = x creates a skin equivalent to calling "window
     // scale x" through the emulator console. At scale = 1, the device
