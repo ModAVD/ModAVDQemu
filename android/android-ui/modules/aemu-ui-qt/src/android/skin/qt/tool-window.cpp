@@ -2054,12 +2054,13 @@ void ToolWindow::on_close_button_clicked() {
     mIsExiting = true;
     mCloseClicked = true;
     if (leanToolbar()) {
-        if (!shouldClose()) {
-            mAskedWhetherToSaveSnapshot = false;
-            mIsExiting = false;
-            mCloseClicked = false;
-            return;
-        }
+        // Android powers off behind the hidden windows. A quick-boot snapshot
+        // of a guest that is shutting down is of no use, so neither ask nor
+        // save one (the same as a shift-click on the full toolbar's close).
+        mAskedWhetherToSaveSnapshot = true;
+        mShouldClose = true;
+        getConsoleAgents()->settings->avdParams()->flags |=
+                AVDINFO_NO_SNAPSHOT_SAVE_ON_EXIT;
 
         for (QPushButton* button : findChildren<QPushButton*>()) {
             button->setEnabled(false);
