@@ -28,6 +28,7 @@
 #include "android/cpu_accelerator.h"
 #include "android/crashreport/CrashReporter.h"
 #include "android/emu/check/include/android/emulation/compatibility_check.h"
+#include "android/emulation/AdbHostServer.h"
 #include "android/emulation/ModavdImePipe.h"
 #include "android/emulation/compatibility_check.h"
 #include "android/emulation/control/globals_agent.h"
@@ -4568,6 +4569,30 @@ bool EmulatorQtWindow::safeShutdownInProgress() const {
            mSafeShutdownState != SafeShutdownState::Forced;
 }
 
+// The private adb server may have been restarted since this instance
+// registered with it at boot (adb kill-server, a crash). With local transport
+// scanning off, as the manager and AUTO-MAS run it, the server then does not
+// know the instance until the guest's adbd reconnects, and the shutdown and
+// sync commands would fail with "device not found". Register again, the way
+// the instance does at boot. A server that is not running yet is started by
+// the first adb command, so keep trying for a few seconds.
+static void registerWithAdbServer() {
+    const int adbPort = getConsoleAgents()->settings->android_adb_port();
+    const int clientPort = android::emulation::AdbHostServer::getClientPort();
+    if (adbPort <= 0 || clientPort <= 0) {
+        return;
+    }
+    android::base::async([adbPort, clientPort] {
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            if (android::emulation::AdbHostServer::notify(adbPort,
+                                                         clientPort)) {
+                return;
+            }
+            System::get()->sleepMs(1000);
+        }
+    });
+}
+
 void EmulatorQtWindow::startSafeShutdown() {
     if (mSafeShutdownState != SafeShutdownState::Idle) {
         return;
@@ -4584,8 +4609,10 @@ void EmulatorQtWindow::startSafeShutdown() {
         return;
     }
 
+    registerWithAdbServer();
     auto command = adb->runAdbCommand(
-            {"shell", "su", "0", "setprop", "sys.powerctl", "shutdown"},
+            {"wait-for-device", "shell", "su", "0", "setprop", "sys.powerctl",
+             "shutdown"},
             [this](const android::emulation::OptionalAdbCommandResult& result) {
                 const bool success = result && result->exit_code == 0;
                 QMetaObject::invokeMethod(
@@ -4628,8 +4655,9 @@ void EmulatorQtWindow::startSafeShutdownSync() {
         return;
     }
 
+    registerWithAdbServer();
     auto command = adb->runAdbCommand(
-            {"shell", "sync"},
+            {"wait-for-device", "shell", "sync"},
             [this](const android::emulation::OptionalAdbCommandResult& result) {
                 const bool success = result && result->exit_code == 0;
                 QMetaObject::invokeMethod(
@@ -4646,7 +4674,9 @@ void EmulatorQtWindow::startSafeShutdownSync() {
                         },
                         Qt::QueuedConnection);
             },
-            2000);
+            // The window is gone and the 25 s guard is still far off: give a
+            // sync with a lot of dirty data time to finish.
+            5000);
     if (!command) {
         LOG(WARNING) << "Safe toolbar shutdown guest sync could not start; forcing exit";
         forceCloseNow();
