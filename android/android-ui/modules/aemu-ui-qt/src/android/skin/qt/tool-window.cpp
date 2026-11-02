@@ -2046,16 +2046,8 @@ bool ToolWindow::shouldClose() {
 
 void ToolWindow::on_close_button_clicked() {
     if (leanToolbar() && mEmulatorWindow->safeShutdownInProgress()) {
-        QMessageBox box(QMessageBox::Question, QString::fromUtf8("正在关机"),
-                        QString::fromUtf8("强制关闭？最近几秒写入的数据可能丢失"),
-                        QMessageBox::Yes | QMessageBox::No,
-                        mEmulatorWindow->containerWindow());
-        box.button(QMessageBox::Yes)->setText(QString::fromUtf8("是"));
-        box.button(QMessageBox::No)->setText(QString::fromUtf8("否"));
-        const auto answer = box.exec();
-        if (answer == QMessageBox::Yes) {
-            mEmulatorWindow->forceCloseNow();
-        }
+        // The windows are already gone and the shutdown is bounded; a
+        // repeated close request has nothing to ask about.
         return;
     }
 
@@ -2078,6 +2070,7 @@ void ToolWindow::on_close_button_clicked() {
             }
         }
         mEmulatorWindow->startSafeShutdown();
+        mEmulatorWindow->hideForSafeShutdown();
         return;
     }
 

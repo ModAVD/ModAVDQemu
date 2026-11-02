@@ -1857,7 +1857,9 @@ void EmulatorQtWindow::maskWindowFrame() {
             mContainer.setMask(bitmap);
         }
     }
-    mContainer.show();
+    if (!mHiddenForSafeShutdown) {
+        mContainer.show();
+    }
     mToolWindow->dockMainWindow();
 
     if (haveFrame != mPreviouslyFramed) {
@@ -2029,7 +2031,7 @@ void EmulatorQtWindow::slot_updateGuestScreen(const QImage& frame) {
 }
 
 void EmulatorQtWindow::show() {
-    if (mClosed) {
+    if (mClosed || mHiddenForSafeShutdown) {
         return;
     }
     mContainer.show();
@@ -2663,7 +2665,7 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
                                        QRect rect,
                                        QSemaphore* semaphore) {
     QSemaphoreReleaser semReleaser(semaphore);
-    if (mClosed) {
+    if (mClosed || mHiddenForSafeShutdown) {
         return;
     }
     if (getConsoleAgents()
@@ -4643,6 +4645,26 @@ void EmulatorQtWindow::startSafeShutdownSync() {
         LOG(WARNING) << "Safe toolbar shutdown guest sync could not start; forcing exit";
         forceCloseNow();
     }
+}
+
+void EmulatorQtWindow::hideForSafeShutdown() {
+    // The windows go away at once; Android keeps shutting down behind them
+    // and the process exits on its own (or after the bounded sync).
+    mHiddenForSafeShutdown = true;
+    mContainer.hideModalOverlay();
+    if (mToolWindow) {
+        mToolWindow->hide();
+        mToolWindow->closeExtendedWindow();
+    }
+    if (mCarClusterWindow) {
+        mCarClusterWindow->hide();
+    }
+    for (auto const& iter : mMultiDisplayWindow) {
+        if (iter.second != nullptr)
+            iter.second->hide();
+    }
+    mContainer.hide();
+    mOverlay.hide();
 }
 
 void EmulatorQtWindow::forceCloseNow() {

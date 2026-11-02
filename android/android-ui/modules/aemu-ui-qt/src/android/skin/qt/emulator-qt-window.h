@@ -240,6 +240,7 @@ public:
 
     android::emulation::AdbInterface* getAdbInterface() const;
     void startSafeShutdown();
+    void hideForSafeShutdown();
     void forceCloseNow();
     bool safeShutdownInProgress() const;
     EmulatorContainer* containerWindow();
@@ -756,6 +757,7 @@ private:
     };
     SafeShutdownState mSafeShutdownState = SafeShutdownState::Idle;
     QTimer mSafeShutdownTimeout;
+    bool mHiddenForSafeShutdown = false;
 
     bool mSkinRemoved{false};
     bool mFrameAlways;  // true = no floating emulator
