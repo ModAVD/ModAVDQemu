@@ -1189,6 +1189,14 @@ void EmulatorQtWindow::slot_gpuWarningMessageAccepted() {
 }
 
 void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
+    // make sure to use the close button on tool window
+    if (!mToolWindow->isLeanToolbar() && isMainThreadRunning() &&
+        !mToolWindow->closeButtonClicked()) {
+        mToolWindow->on_close_button_clicked();
+        event->ignore();
+        return;
+    }
+
     if (mToolWindow && isMainThreadRunning() &&
         mToolWindow->safeShutdownInProgress()) {
         mToolWindow->on_close_button_clicked();
@@ -1196,7 +1204,8 @@ void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
         return;
     }
 
-    if (!isMainThreadRunning()) {
+    if (!isMainThreadRunning() &&
+        mSafeShutdownState != SafeShutdownState::Idle) {
         if (auto* modal = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
             modal->close();
         }
@@ -1745,7 +1754,7 @@ void EmulatorQtWindow::maskWindowFrame() {
     }
 #endif
 
-    if (mContainer.windowFlags() != flags) {
+    if (!ToolWindow::inWindowNav() || mContainer.windowFlags() != flags) {
         mContainer.setWindowFlags(flags);
     }
 
@@ -2530,6 +2539,12 @@ void EmulatorQtWindow::slot_releaseBitmap(SkinSurface* s,
 }
 
 void EmulatorQtWindow::slot_requestClose(QSemaphore* semaphore) {
+    // The lean toolbar keeps console and main-loop exits immediate; only its
+    // own close paths start the safe shutdown.
+    if (!mToolWindow->isLeanToolbar() && isMainThreadRunning() &&
+        !mToolWindow->closeButtonClicked()) {
+        mToolWindow->on_close_button_clicked();
+    }
     QSemaphoreReleaser semReleaser(semaphore);
     mToolWindow->shouldClose();
     if (isMainThreadRunning()) {

@@ -1055,8 +1055,9 @@ bool ToolWindow::needExtendedWindow(QtUICommand cmd) const {
         case QtUICommand::VOLUME_UP:
         case QtUICommand::GLASSES:
         case QtUICommand::TOGGLE_MICROPHONE:
-        case QtUICommand::ALL_APPS:
             return false;
+        case QtUICommand::ALL_APPS:
+            return !leanToolbar();
         default:
             return true;
     }
@@ -1972,7 +1973,9 @@ bool ToolWindow::askWhetherToSaveSnapshot() {
     int64_t startTime = get_uptime_ms();
     QMessageBox msgBox(QMessageBox::Question, tr("Save quick-boot state"),
                        askMessage, (QMessageBox::Yes | QMessageBox::No),
-                       mEmulatorWindow->containerWindow());
+                       inWindowNav() ? static_cast<QWidget*>(
+                                               mEmulatorWindow->containerWindow())
+                                     : this);
     // Add a Cancel button to enable the MessageBox's X.
     // Since embedded has already disconnected by this point, we always assume shutdown.
     if(!getConsoleAgents()
