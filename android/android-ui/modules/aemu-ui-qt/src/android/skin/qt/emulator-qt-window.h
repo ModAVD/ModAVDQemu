@@ -568,6 +568,7 @@ private:
 
     void runAdbShellPowerDownAndQuit();
     void requestGuestPowerOff();
+    void requestInitPowerOff();
     void startSafeShutdownSync();
     void startSessionEndSync();
     void setVisibleExtent(QBitmap bitMap);
