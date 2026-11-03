@@ -1206,8 +1206,9 @@ void EmulatorQtWindow::slot_gpuWarningMessageAccepted() {
 }
 
 void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
-    // make sure to use the close button on tool window
-    if (!mToolWindow->isLeanToolbar() && isMainThreadRunning() &&
+    // make sure to use the close button on tool window. Once Qt quits, the
+    // tool window may be gone already; see slot_clearInstance.
+    if (mToolWindow && !mToolWindow->isLeanToolbar() && isMainThreadRunning() &&
         !mToolWindow->closeButtonClicked()) {
         mToolWindow->on_close_button_clicked();
         event->ignore();
@@ -1233,7 +1234,7 @@ void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
     }
 
     // make sure to use the close button on tool window
-    if (!mToolWindow->shouldClose()) {
+    if (mToolWindow && !mToolWindow->shouldClose()) {
         event->ignore();
         return;
     }
@@ -1307,12 +1308,13 @@ void EmulatorQtWindow::closeEvent(QCloseEvent* event) {
         mOverlay.hide();
         hide();
         event->accept();
-        if (mHiddenForSafeShutdown) {
+        if (mHiddenForSafeShutdown && !mClearedForQuit) {
             // The windows were hidden when the safe shutdown started, so this
             // close is not the last visible window closing and Qt would not
             // leave its event loop: the process would end only by the kill
             // guard, without the normal teardown. Quit here, as the hidden
-            // window mode does in EmulatorContainer::closeEvent.
+            // window mode does in EmulatorContainer::closeEvent. Not when Qt
+            // is quitting already and closing the windows itself.
             qApp->quit();
         }
     }
@@ -2309,6 +2311,10 @@ void EmulatorQtWindow::startThread(StartFunction f, int argc, char** argv) {
 }
 
 void EmulatorQtWindow::slot_clearInstance() {
+    // Qt is quitting. When Windows ends the session, it then closes the
+    // windows itself, after the tool window below is gone: the close events
+    // must not read the tool window or quit again.
+    mClearedForQuit = true;
 #ifndef __APPLE__
     if (mToolWindow) {
         delete mToolWindow;
@@ -2325,6 +2331,10 @@ void EmulatorQtWindow::slot_clearInstance() {
     // hang on exit.
     System::get()->cleanupWaitingPids();
     if (mMainLoopThread && mMainLoopThread->isRunning()) {
+        // Windows ending the session gets here from WM_ENDSESSION with QEMU
+        // still running. The wait gives QEMU time to stop the VM and close its
+        // disks before Windows ends the process; the kill guard that
+        // slot_requestClose starts bounds it.
         requestClose();
         mMainLoopThread->wait();
     }
@@ -2564,14 +2574,20 @@ void EmulatorQtWindow::slot_releaseBitmap(SkinSurface* s,
 }
 
 void EmulatorQtWindow::slot_requestClose(QSemaphore* semaphore) {
+    // When Qt quits while QEMU still runs, as it does when Windows ends the
+    // session, slot_clearInstance has already deleted the tool window: there
+    // is nothing left to ask, so only stop QEMU.
+    //
     // The lean toolbar keeps console and main-loop exits immediate; only its
     // own close paths start the safe shutdown.
-    if (!mToolWindow->isLeanToolbar() && isMainThreadRunning() &&
+    if (mToolWindow && !mToolWindow->isLeanToolbar() && isMainThreadRunning() &&
         !mToolWindow->closeButtonClicked()) {
         mToolWindow->on_close_button_clicked();
     }
     QSemaphoreReleaser semReleaser(semaphore);
-    mToolWindow->shouldClose();
+    if (mToolWindow) {
+        mToolWindow->shouldClose();
+    }
     if (isMainThreadRunning()) {
         if (!getConsoleAgents()->settings->android_cmdLineOptions()->grpc_ui) {
             // TODO: This should be a backend operation, and moved out of Qt codebase.

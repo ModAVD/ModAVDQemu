@@ -339,8 +339,10 @@ void EmulatorContainer::changeEvent(QEvent* event) {
 void EmulatorContainer::closeEvent(QCloseEvent* event) {
     // make sure the toolWindow's close button is the only exit point
     // from qt: we could get closeEvent directly from host windowing
-    // framework.
+    // framework. Once Qt quits, the tool window may be gone already; see
+    // EmulatorQtWindow::slot_clearInstance.
     if (mEmulatorWindow->isMainThreadRunning() &&
+        mEmulatorWindow->toolWindow() &&
         !mEmulatorWindow->toolWindow()->closeButtonClicked()) {
         mEmulatorWindow->toolWindow()->on_close_button_clicked();
         event->ignore();
@@ -367,7 +369,9 @@ void EmulatorContainer::closeEvent(QCloseEvent* event) {
 }
 
 void EmulatorContainer::focusInEvent(QFocusEvent* event) {
-    mEmulatorWindow->toolWindow()->raise();
+    if (mEmulatorWindow->toolWindow()) {
+        mEmulatorWindow->toolWindow()->raise();
+    }
     if (mModalOverlay) {
         mModalOverlay->raise();
     }
@@ -411,7 +415,9 @@ void EmulatorContainer::keyReleaseEvent(QKeyEvent* event) {
 void EmulatorContainer::moveEvent(QMoveEvent* event) {
     QScrollArea::moveEvent(event);
     mEmulatorWindow->simulateWindowMoved(event->pos());
-    mEmulatorWindow->toolWindow()->dockMainWindow();
+    if (mEmulatorWindow->toolWindow()) {
+        mEmulatorWindow->toolWindow()->dockMainWindow();
+    }
     adjustModalOverlayGeometry();
     adjustVirtualSceneDialogGeometry();
     adjustMessagesOverlayGeometry();

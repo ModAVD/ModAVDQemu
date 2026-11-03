@@ -714,6 +714,8 @@ private:
     // Some events may arrive after closing the main window (e.g. async screen
     // redraw requests); we want to ignore those when exiting.
     bool mClosed = false;
+    // slot_clearInstance has run: Qt is quitting and the tool window is gone.
+    bool mClearedForQuit = false;
 
     EventCapturer mEventCapturer;
     std::shared_ptr<UIEventRecorder<android::base::CircularBuffer>>
