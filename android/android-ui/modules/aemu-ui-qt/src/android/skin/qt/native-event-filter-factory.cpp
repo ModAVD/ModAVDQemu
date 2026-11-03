@@ -134,10 +134,25 @@ class NativeEventFilter : public QAbstractNativeEventFilter {
 public:
     bool nativeEventFilter(const QByteArray& eventType,
                            void* message,
-                           qintptr*) override {
+                           qintptr* result) override {
         if (eventType.compare("windows_generic_MSG") == 0) {
             MSG* ev = static_cast<MSG*>(message);
-            if (ev->message == WM_KEYDOWN || ev->message == WM_SYSKEYDOWN) {
+            if (ev->message == WM_QUERYENDSESSION) {
+                // Windows is logging off, restarting or shutting down; see
+                // EmulatorQtWindow::queryEndSession().
+                EmulatorQtWindow* window = EmulatorQtWindow::getInstance();
+                if (window && window->queryEndSession(
+                                      (ev->lParam & ENDSESSION_CRITICAL) != 0)) {
+                    *result = FALSE;
+                    return true;
+                }
+            } else if (ev->message == WM_ENDSESSION) {
+                // Qt's own handling then quits.
+                EmulatorQtWindow* window = EmulatorQtWindow::getInstance();
+                if (window) {
+                    window->endSession(ev->wParam != FALSE);
+                }
+            } else if (ev->message == WM_KEYDOWN || ev->message == WM_SYSKEYDOWN) {
                 // Since being upgraded to 5.12.1, the prebuilt QT library
                 // cannot handle numpad keys when number lock is on. To
                 // workaround, we map numpad keys to its corresponding alpha

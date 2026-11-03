@@ -243,6 +243,10 @@ public:
     void hideForSafeShutdown();
     void forceCloseNow();
     bool safeShutdownInProgress() const;
+    // Windows ending the session: WM_QUERYENDSESSION (returns whether to
+    // refuse it) and WM_ENDSESSION (|ending| is its wParam).
+    bool queryEndSession(bool critical);
+    void endSession(bool ending);
     EmulatorContainer* containerWindow();
     QSize guestAreaSize() const;
     bool isInZoomMode() const;
@@ -565,6 +569,7 @@ private:
     void runAdbShellPowerDownAndQuit();
     void requestGuestPowerOff();
     void startSafeShutdownSync();
+    void startSessionEndSync();
     void setVisibleExtent(QBitmap bitMap);
     Qt::CursorShape getCursorShape(bool mouseGrabbed);
 
@@ -761,6 +766,9 @@ private:
     SafeShutdownState mSafeShutdownState = SafeShutdownState::Idle;
     QTimer mSafeShutdownTimeout;
     bool mHiddenForSafeShutdown = false;
+#ifdef _WIN32
+    bool mSessionEndBlocked = false;
+#endif
 
     bool mSkinRemoved{false};
     bool mFrameAlways;  // true = no floating emulator

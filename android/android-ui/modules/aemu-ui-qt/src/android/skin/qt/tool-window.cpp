@@ -2046,35 +2046,20 @@ bool ToolWindow::shouldClose() {
 
 void ToolWindow::on_close_button_clicked() {
     if (leanToolbar() && mEmulatorWindow->safeShutdownInProgress()) {
-        // The windows are already gone and the shutdown is bounded; a
-        // repeated close request has nothing to ask about.
+        // The shutdown is already under way and bounded; a repeated close
+        // request has nothing to ask about. It only takes the windows away if
+        // they are still up, as when Windows is ending the session.
+        mEmulatorWindow->hideForSafeShutdown();
+        return;
+    }
+
+    if (leanToolbar()) {
+        beginLeanSafeShutdown(true);
         return;
     }
 
     mIsExiting = true;
     mCloseClicked = true;
-    if (leanToolbar()) {
-        // Android powers off behind the hidden windows. A quick-boot snapshot
-        // of a guest that is shutting down is of no use, so neither ask nor
-        // save one (the same as a shift-click on the full toolbar's close).
-        mAskedWhetherToSaveSnapshot = true;
-        mShouldClose = true;
-        getConsoleAgents()->settings->avdParams()->flags |=
-                AVDINFO_NO_SNAPSHOT_SAVE_ON_EXIT;
-
-        for (QPushButton* button : findChildren<QPushButton*>()) {
-            button->setEnabled(false);
-        }
-        if (mWindowNavColumn) {
-            for (QPushButton* button : mWindowNavColumn->findChildren<QPushButton*>()) {
-                button->setEnabled(false);
-            }
-        }
-        mEmulatorWindow->startSafeShutdown();
-        mEmulatorWindow->hideForSafeShutdown();
-        return;
-    }
-
     setEnabled(false);
     if (QGuiApplication::queryKeyboardModifiers().testFlag(Qt::ShiftModifier)) {
         // The user shift-clicked on the X
@@ -2096,6 +2081,39 @@ void ToolWindow::on_close_button_clicked() {
         setEnabled(true);
         mIsExiting = false;
         mCloseClicked = false;
+    }
+}
+
+void ToolWindow::beginLeanSafeShutdown(bool hideWindows) {
+    if (mEmulatorWindow->safeShutdownInProgress()) {
+        return;
+    }
+
+    mIsExiting = true;
+    mCloseClicked = true;
+    // Android powers off while the emulator waits: behind the hidden windows
+    // after a close, in sight when Windows ends the session. A quick-boot
+    // snapshot of a guest that is shutting down is of no use, so neither ask
+    // nor save one (the same as a shift-click on the full toolbar's close).
+    mAskedWhetherToSaveSnapshot = true;
+    mShouldClose = true;
+    getConsoleAgents()->settings->avdParams()->flags |=
+            AVDINFO_NO_SNAPSHOT_SAVE_ON_EXIT;
+
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setEnabled(false);
+    }
+    if (mWindowNavColumn) {
+        for (QPushButton* button : mWindowNavColumn->findChildren<QPushButton*>()) {
+            button->setEnabled(false);
+        }
+    }
+    // Snapshot saves and loads from the extended controls would race the
+    // shutdown when the windows stay up.
+    closeExtendedWindow();
+    mEmulatorWindow->startSafeShutdown();
+    if (hideWindows) {
+        mEmulatorWindow->hideForSafeShutdown();
     }
 }
 

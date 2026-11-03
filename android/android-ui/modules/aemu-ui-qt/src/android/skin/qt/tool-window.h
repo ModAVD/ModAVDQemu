@@ -144,6 +144,10 @@ public:
 
     bool closeButtonClicked() const { return mCloseClicked; }
     bool safeShutdownInProgress() const;
+    // The lean toolbar's close: Android powers off and the emulator quits
+    // once it has. The windows go away at once unless |hideWindows| is false,
+    // as when Windows ends the session.
+    void beginLeanSafeShutdown(bool hideWindows);
 
     bool isLeanToolbar() const;
     int leanToolbarWidth() const;
