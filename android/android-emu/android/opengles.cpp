@@ -478,6 +478,16 @@ static int startOpenglesRendererImpl(
         }
     }
 
+    // gfxstream emulates ASTC and ETC2 with compute shaders when the host GPU
+    // lacks them, which desktop GPUs do for ASTC. Since gfxstream bf62e4b7 it
+    // only does so when these features are set, as the virtio-gpu frontend
+    // does (ModAVD#39).
+    gfxstreamFeatures.VulkanAstcEmulation.setEnabled(true);
+    gfxstreamFeatures.VulkanEtc2Emulation.setEnabled(true);
+    absl::StrAppend(&reportGfxstreamFeatures,
+                    gfxstreamFeatures.VulkanAstcEmulation.getName(), ", ",
+                    gfxstreamFeatures.VulkanEtc2Emulation.getName(), ", ");
+
     std::string maxGuestVulkan = "1.3";
     if (const char* env = getenv("ANDROID_EMU_VK_ENABLE_1_4")) {
         // Allow force-enabling with env variable for tests
