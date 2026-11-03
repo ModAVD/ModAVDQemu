@@ -563,6 +563,7 @@ private:
                      android::emulation::FilePusher::Result result);
 
     void runAdbShellPowerDownAndQuit();
+    void requestGuestPowerOff();
     void startSafeShutdownSync();
     void setVisibleExtent(QBitmap bitMap);
     Qt::CursorShape getCursorShape(bool mouseGrabbed);

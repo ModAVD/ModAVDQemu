@@ -82,6 +82,7 @@
 #include "host-common/multi_display_agent.h"
 #include "host-common/opengl/emugl_config.h"
 #include "host-common/snapshot_common.h"
+#include "host-common/vm_operations.h"
 
 #define DEBUG 1
 
@@ -4626,6 +4627,21 @@ static void registerWithAdbServer() {
     });
 }
 
+// A paused VM (console "avd pause", gRPC setVmState) runs no vCPU, so the
+// guest's adbd does not answer: the sync and shutdown commands would wait out
+// their limits and the emulator would quit without a sync. Resume it first, on
+// the QEMU main loop as gRPC does: the transition takes the I/O lock. Only a
+// plain pause is undone; a debugger stop, a snapshot save or load and an I/O
+// error are left as they are.
+static void resumePausedVmForSafeShutdown() {
+    const auto* vm = getConsoleAgents()->vm;
+    if (!vm || vm->getRunState() != QEMU_RUN_STATE_PAUSED) {
+        return;
+    }
+    dinfo("Safe toolbar shutdown: the VM is paused; resuming it first");
+    android::base::ThreadLooper::runOnMainLooper([vm] { vm->vmResume(); });
+}
+
 void EmulatorQtWindow::startSafeShutdown() {
     if (mSafeShutdownState != SafeShutdownState::Idle) {
         return;
@@ -4636,10 +4652,11 @@ void EmulatorQtWindow::startSafeShutdown() {
         AutoLock lock(safeShutdownLock());
         sSafeShutdownWindow = this;
     }
-    dinfo("Safe toolbar shutdown: asking Android to power off");
+    dinfo("Safe toolbar shutdown: syncing the guest, then asking Android to power off");
     System::get()->waitAndKillSelf(25);
     updateWindowTitle();
     mSafeShutdownTimeout.start();
+    resumePausedVmForSafeShutdown();
     auto* adb = *mAdbInterface;
     if (!adb) {
         dwarning("Safe toolbar shutdown has no ADB interface; syncing guest");
@@ -4648,6 +4665,43 @@ void EmulatorQtWindow::startSafeShutdown() {
     }
 
     registerWithAdbServer();
+    // Sync before Android starts shutting down: what was written before the
+    // close is then on disk even if the process is killed while Android powers
+    // off (Task Manager, Windows ending the session), and it no longer hangs
+    // on the fallback sync after the timeout, when adbd may be gone.
+    auto command = adb->runAdbCommand(
+            {"wait-for-device", "shell", "sync"},
+            [this](const android::emulation::OptionalAdbCommandResult& result) {
+                const bool success = result && result->exit_code == 0;
+                AutoLock lock(safeShutdownLock());
+                if (sSafeShutdownWindow != this) {
+                    return;
+                }
+                QMetaObject::invokeMethod(
+                        this,
+                        [this, success] {
+                            if (mSafeShutdownState !=
+                                SafeShutdownState::StoppingGuest) {
+                                return;
+                            }
+                            if (success) {
+                                dinfo("Safe toolbar shutdown: guest synced; asking Android to power off");
+                            } else {
+                                dwarning("Safe toolbar shutdown guest sync failed; asking Android to power off anyway");
+                            }
+                            requestGuestPowerOff();
+                        },
+                        Qt::QueuedConnection);
+            },
+            5000);
+    if (!command) {
+        dwarning("Safe toolbar shutdown guest sync could not start; asking Android to power off anyway");
+        requestGuestPowerOff();
+    }
+}
+
+void EmulatorQtWindow::requestGuestPowerOff() {
+    auto* adb = *mAdbInterface;
     auto command = adb->runAdbCommand(
             {"wait-for-device", "shell", "su", "0", "setprop", "sys.powerctl",
              "shutdown"},
