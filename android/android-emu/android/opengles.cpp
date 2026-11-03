@@ -488,6 +488,26 @@ static int startOpenglesRendererImpl(
                     gfxstreamFeatures.VulkanAstcEmulation.getName(), ", ",
                     gfxstreamFeatures.VulkanEtc2Emulation.getName(), ", ");
 
+    // MAS (ModAVD#37), on unless ANDROID_EMU_VK_WC_AS_CACHED=0: allocate guest
+    // memory of a host visible type that is neither cached nor device local
+    // (NVIDIA's write-combined system memory) from a cached coherent type on
+    // the same heap. The guest writes its uploads through that mapping, and
+    // with the write-combined type the copy took a third of Star Rail's render
+    // thread under WHPX.
+    if (const char* env = getenv("ANDROID_EMU_VK_WC_AS_CACHED");
+        env && strcmp(env, "0") == 0) {
+        dinfo("Vulkan: uncached host visible memory keeps its memory type "
+              "(ANDROID_EMU_VK_WC_AS_CACHED=0)");
+    } else {
+        gfxstreamFeatures.VulkanAllocateUncachedHostVisibleAsCached.setEnabled(
+                true);
+        absl::StrAppend(&reportGfxstreamFeatures,
+                        gfxstreamFeatures
+                                .VulkanAllocateUncachedHostVisibleAsCached
+                                .getName(),
+                        ", ");
+    }
+
     std::string maxGuestVulkan = "1.3";
     if (const char* env = getenv("ANDROID_EMU_VK_ENABLE_1_4")) {
         // Allow force-enabling with env variable for tests
