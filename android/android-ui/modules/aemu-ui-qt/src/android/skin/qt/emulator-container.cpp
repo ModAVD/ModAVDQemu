@@ -16,6 +16,8 @@
 #include <qlist.h>        // for QList<>::iterator
 #include <qnamespace.h>   // for WindowMinimized
 #include <qwindowdefs.h>  // for WId
+#include <QAccessible>
+#include <QAccessibleWidget>
 #include <QFlags>         // for QFlags
 #include <QByteArray>      // for qgetenv
 #include <QFrame>         // for QFrame
@@ -69,6 +71,22 @@ class QStyle;
 
 static constexpr int kEventBufferSize = 8;
 
+#if QT_CONFIG(accessibility)
+// The lean window's title bar sits in the scroll area's top margin, outside
+// its viewport. Qt's accessible interface for scroll areas lists only the
+// viewport and the scroll bars, so screen readers and UI Automation would not
+// find the title bar's buttons. A plain widget interface lists every child.
+static QAccessibleInterface* leanContainerAccessible(const QString& className,
+                                                     QObject* object) {
+    if (className != QLatin1String("EmulatorContainer") || !object ||
+        !object->isWidgetType()) {
+        return nullptr;
+    }
+    return new QAccessibleWidget(static_cast<QWidget*>(object),
+                                 QAccessible::Window);
+}
+#endif
+
 #ifdef _WIN32
 // The lean window's title bar and guest screen, as WindowsLeanFrame needs
 // them, in device pixels.
@@ -114,6 +132,16 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
     if (lean) {
         setWindowFlags(kLeanWindowFlags);
         setStyleSheet(QStringLiteral("EmulatorContainer { background: #20212D; }"));
+#if QT_CONFIG(accessibility)
+        static const bool accessibleInstalled = [] {
+            QAccessible::installFactory(leanContainerAccessible);
+            return true;
+        }();
+        (void)accessibleInstalled;
+#endif
+        // Like the system's caption buttons, the title bar's buttons show
+        // their tool tips while the window is not the active one.
+        setAttribute(Qt::WA_AlwaysShowToolTips);
 #ifdef _WIN32
         mLeanFrame = std::make_unique<WindowsLeanFrame>(
                 [this] { return leanFrameGeometry(this, mEmulatorWindow); },
