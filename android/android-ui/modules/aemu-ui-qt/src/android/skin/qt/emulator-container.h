@@ -42,11 +42,18 @@ class QString;
 class QWidget;
 class VirtualSceneInfoDialog;
 class GlassesStatusOverlay;
+class WindowsLeanFrame;
 
 class EmulatorContainer : public QScrollArea {
     Q_OBJECT
 
 public:
+    // The window flags of the lean window, which draws its own title bar
+    // (ModAVD#58): frameless to Qt, see WindowsLeanFrame.
+    static constexpr Qt::WindowFlags kLeanWindowFlags =
+            Qt::Window | Qt::FramelessWindowHint | Qt::WindowSystemMenuHint |
+            Qt::WindowMinimizeButtonHint;
+
     explicit EmulatorContainer(EmulatorQtWindow* window);
     virtual ~EmulatorContainer();
 
@@ -70,7 +77,20 @@ public:
     void stopResizeTimer();
     QSize viewportSize() const;
 
-    void setLeanToolbarWidth(int width) { setViewportMargins(0, 0, width, 0); }
+    // The lean title bar takes the top of the window, above the guest screen.
+    void setLeanTitleBarHeight(int height) {
+        setViewportMargins(0, height, 0, 0);
+    }
+    // Gives the native window the lean window's frame again; Qt resets the
+    // window style whenever it changes the window flags.
+    void applyLeanFrame();
+
+protected:
+    bool nativeEvent(const QByteArray& eventType,
+                     void* message,
+                     qintptr* result) override;
+
+public:
 
     void prepareForRotation() { mRotating = true; }
 
@@ -116,7 +136,10 @@ private:
     QList<QEvent::Type> mEventBuffer;
     QTimer mResizeTimer;
     bool mRotating = false;
-    bool mDarkTitleBarConnected = false;
+#ifdef _WIN32
+    std::unique_ptr<WindowsLeanFrame> mLeanFrame;
+    bool mLeanFrameThemeConnected = false;
+#endif
     std::unique_ptr<android::base::RaiiEventListener<
             android::DisplayPowerModeNotificationSupport,
             android::DisplayPowerModeChangeEvent>>

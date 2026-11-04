@@ -237,6 +237,9 @@ public:
     void pollEvent(SkinEvent* event, bool* hasEvent);
 
     WId getWindowId();
+    // Where the guest screen's area starts in the window of getWindowId(), in
+    // logical pixels (see skin_winsys_get_content_offset).
+    QPoint contentOffset() const;
 
     android::emulation::AdbInterface* getAdbInterface() const;
     void startSafeShutdown();

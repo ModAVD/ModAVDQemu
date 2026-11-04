@@ -51,6 +51,7 @@
 #include "android/xr-defines.h"
 #include "host-common/qt_ui_defs.h"
 
+class LeanTitleBar;
 class PostureSelectionDialog;
 class XrEnvironmentModeDialog;
 class XrInputModeDialog;
@@ -150,8 +151,13 @@ public:
     void beginLeanSafeShutdown(bool hideWindows);
 
     bool isLeanToolbar() const;
-    int leanToolbarWidth() const;
+    // Whether the window draws its own title bar with the navigation and
+    // window buttons (ModAVD#58): the lean toolbar on Windows, with a window.
     static bool inWindowNav();
+    // What the window adds around the guest screen, in logical pixels: the
+    // title bar's height with inWindowNav(), nothing otherwise.
+    static QSize windowChrome();
+    LeanTitleBar* leanTitleBar() const { return mLeanTitleBar; }
 
     bool clipboardSharingSupported() const { return mClipboardSupported; }
     void forwardKeyToEmulator(uint32_t keycode, bool down);
@@ -223,9 +229,9 @@ private:
     virtual void paintEvent(QPaintEvent*) override;
     virtual void hideEvent(QHideEvent* event) override;
     void rebuildBackingStoreIfStale();
-    void createWindowNavColumn();
-    void positionWindowNavColumn();
-    void syncWindowNavEnabled();
+    void createLeanTitleBar();
+    void positionLeanTitleBar();
+    void syncLeanTitleBarEnabled();
 
     EmulatorQtWindow* mEmulatorWindow;
     android::base::MemberOnDemandT<ExtendedWindowHolder,
@@ -242,7 +248,7 @@ private:
                                    void (ToolWindow::*)(TouchpadWindow*)>
             mTouchpadWindow;
     std::unique_ptr<Ui::ToolControls> mToolsUi;
-    QWidget* mWindowNavColumn = nullptr;
+    LeanTitleBar* mLeanTitleBar = nullptr;
     bool mStartedAdbStopProcess = false;
     ShortcutKeyStore<QtUICommand> mShortcutKeyStore;
     bool mIsExtendedWindowVisibleOnShow = false;

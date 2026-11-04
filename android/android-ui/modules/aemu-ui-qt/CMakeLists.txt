@@ -29,6 +29,7 @@ android_qt_lib(
       android/skin/qt/FramelessDetector.cpp
       android/skin/qt/GlassesStatusOverlay.cpp
       android/skin/qt/init-qt.cpp
+      android/skin/qt/lean-title-bar.cpp
       android/skin/qt/left-hand-dialog.cpp
       android/skin/qt/left-hand-dialog.ui
       android/skin/qt/ModalOverlay.cpp
@@ -65,6 +66,7 @@ android_qt_lib(
       android/window-agent-impl.cpp
   DEPS aemu-ui-car-property-utils
        aemu-ui-headless # Yes! The QT ui depends on the headless one..
+       aemu-ui-lean-window
        aemu-ui-qt-base
        aemu::recording
        android-emu
@@ -119,7 +121,9 @@ endif()
 
 if(WINDOWS_MSVC_X86_64)
   target_sources(
-    aemu-ui-qt PRIVATE src/android/skin/qt/windows-native-window.cpp
+    aemu-ui-qt PRIVATE src/android/skin/qt/windows-lean-frame.cpp
+                       src/android/skin/qt/windows-lean-frame.h
+                       src/android/skin/qt/windows-native-window.cpp
                        src/android/skin/qt/windows-native-window.h)
   target_link_libraries(aemu-ui-qt PUBLIC dirent-win32)
 

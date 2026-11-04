@@ -92,6 +92,7 @@
 #include "android/skin/qt/extended-pages/common.h"
 #include "android/skin/qt/extended-pages/virtual-sensors-page.h"
 #include "android/skin/qt/extended-window.h"
+#include "android/skin/qt/lean-title-bar.h"
 #include "android/skin/qt/posture-selection-dialog.h"
 #include "android/skin/qt/qt-settings.h"
 #include "android/skin/qt/qt-ui-commands.h"
@@ -223,6 +224,11 @@ bool ToolWindow::inWindowNav() {
 #else
     return false;
 #endif
+}
+
+// static
+QSize ToolWindow::windowChrome() {
+    return inWindowNav() ? QSize(0, LeanTitleBar::kHeight) : QSize(0, 0);
 }
 
 template <typename T>
@@ -720,7 +726,7 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
     }
 
     if (inWindowNav()) {
-        createWindowNavColumn();
+        createLeanTitleBar();
     }
 
     sToolWindow = this;
@@ -952,86 +958,72 @@ void ToolWindow::show() {
 
 void ToolWindow::setVisible(bool visible) {
     if (inWindowNav()) {
+        // The title bar stands in for this window.
         QFrame::setVisible(false);
-        if (mWindowNavColumn) {
-            mWindowNavColumn->setVisible(true);
-            positionWindowNavColumn();
+        if (mLeanTitleBar) {
+            mLeanTitleBar->setVisible(true);
+            positionLeanTitleBar();
         }
         return;
     }
     QFrame::setVisible(visible);
 }
 
-void ToolWindow::createWindowNavColumn() {
-    if (mWindowNavColumn) {
+void ToolWindow::createLeanTitleBar() {
+    if (mLeanTitleBar) {
         return;
     }
-    mWindowNavColumn = new QWidget(mEmulatorWindow->containerWindow());
-    mWindowNavColumn->setObjectName(QStringLiteral("windowNavColumn"));
-    mWindowNavColumn->setStyleSheet(QStringLiteral(
-            "#windowNavColumn { background: #20212D; }"
-            "#windowNavColumn QPushButton { background: #20212D; color: #E8E8EC; border: 0; }"
-            "#windowNavColumn QPushButton:hover { background: #303142; }"
-            "#windowNavColumn QPushButton:pressed { background: #3B3D52; }"
-            "#windowNavColumn QPushButton:disabled { color: #777985; background: #20212D; }"));
-    mWindowNavColumn->setFocusPolicy(Qt::NoFocus);
-    auto* layout = new QVBoxLayout(mWindowNavColumn);
-    layout->setContentsMargins(10, 0, 10, 0);
-    layout->setSpacing(0);
-    layout->addStretch(1);
+    mLeanTitleBar = new LeanTitleBar(mEmulatorWindow->containerWindow());
+    // Room for it from the start, before the guest screen is placed.
+    mEmulatorWindow->containerWindow()->setLeanTitleBarHeight(
+            LeanTitleBar::kHeight);
 
-    auto addButton = [&](QPushButton* source, auto pressed, auto released) {
-        if (source->isHidden()) {
-            return;
-        }
-        auto* button = new QPushButton(mWindowNavColumn);
-        button->setObjectName(QStringLiteral("windowNavButton"));
-        button->setFocusPolicy(Qt::NoFocus);
-        button->setFixedSize(34, 34);
-        button->setIcon(source->icon());
-        button->setIconSize(source->iconSize());
-        button->setProperty("themeIconName", source->property("themeIconName"));
-        button->setProperty("ToolWindowButton", true);
-        button->setProperty("iconSize", source->iconSize());
-        button->setProperty("minimumSize", QSize(34, 34));
-        button->setToolTip(source->toolTip());
-        QObject::connect(button, &QPushButton::pressed, this, pressed);
-        QObject::connect(button, &QPushButton::released, this, released);
-        layout->addWidget(button, 0, Qt::AlignHCenter);
-    };
-    addButton(mToolsUi->back_button, &ToolWindow::on_back_button_pressed,
-              &ToolWindow::on_back_button_released);
-    QPushButton* homeSource = mToolsUi->home_button->isHidden()
-                                      ? mToolsUi->all_apps_button
-                                      : mToolsUi->home_button;
-    if (homeSource == mToolsUi->all_apps_button) {
-        addButton(homeSource, &ToolWindow::on_all_apps_button_pressed,
-                  &ToolWindow::on_all_apps_button_released);
+    QPushButton* back = mLeanTitleBar->backButton();
+    back->setVisible(!mToolsUi->back_button->isHidden());
+    QObject::connect(back, &QPushButton::pressed, this,
+                     &ToolWindow::on_back_button_pressed);
+    QObject::connect(back, &QPushButton::released, this,
+                     &ToolWindow::on_back_button_released);
+
+    // AVDs whose home is in the all apps button (AllAppsForHomeTray) hide the
+    // home button and keep that one.
+    QPushButton* home = mLeanTitleBar->homeButton();
+    if (mToolsUi->home_button->isHidden()) {
+        home->setVisible(!mToolsUi->all_apps_button->isHidden());
+        QObject::connect(home, &QPushButton::pressed, this,
+                         &ToolWindow::on_all_apps_button_pressed);
+        QObject::connect(home, &QPushButton::released, this,
+                         &ToolWindow::on_all_apps_button_released);
     } else {
-        addButton(homeSource, &ToolWindow::on_home_button_pressed,
-                  &ToolWindow::on_home_button_released);
+        QObject::connect(home, &QPushButton::pressed, this,
+                         &ToolWindow::on_home_button_pressed);
+        QObject::connect(home, &QPushButton::released, this,
+                         &ToolWindow::on_home_button_released);
     }
-    mWindowNavColumn->show();
-    positionWindowNavColumn();
+
+    QObject::connect(mLeanTitleBar->minimizeButton(), &QPushButton::clicked,
+                     this, [this] { mEmulatorWindow->showMinimized(); });
+    QObject::connect(mLeanTitleBar->closeButton(), &QPushButton::clicked, this,
+                     [this] { on_close_button_clicked(); });
+
+    mLeanTitleBar->show();
+    positionLeanTitleBar();
 }
 
-void ToolWindow::positionWindowNavColumn() {
-    if (!mWindowNavColumn || !inWindowNav()) {
+void ToolWindow::positionLeanTitleBar() {
+    if (!mLeanTitleBar || !inWindowNav()) {
         return;
     }
     auto* container = mEmulatorWindow->containerWindow();
-    const QRect vr = container->viewport()->geometry();
-    mWindowNavColumn->setGeometry(vr.right() + 1, vr.top(), 54, vr.height());
-    mWindowNavColumn->raise();
+    mLeanTitleBar->setGeometry(0, 0, container->width(), LeanTitleBar::kHeight);
+    mLeanTitleBar->raise();
 }
 
-void ToolWindow::syncWindowNavEnabled() {
-    if (mWindowNavColumn) {
-        mWindowNavColumn->setEnabled(isEnabled());
+void ToolWindow::syncLeanTitleBarEnabled() {
+    if (mLeanTitleBar) {
+        mLeanTitleBar->setEnabled(isEnabled());
         if (safeShutdownInProgress()) {
-            for (QPushButton* button : mWindowNavColumn->findChildren<QPushButton*>()) {
-                button->setEnabled(false);
-            }
+            mLeanTitleBar->setButtonsEnabled(false);
         }
     }
 }
@@ -1039,7 +1031,7 @@ void ToolWindow::syncWindowNavEnabled() {
 void ToolWindow::changeEvent(QEvent* event) {
     QFrame::changeEvent(event);
     if (event->type() == QEvent::EnabledChange) {
-        syncWindowNavEnabled();
+        syncLeanTitleBarEnabled();
     }
 }
 
@@ -1733,13 +1725,11 @@ void ToolWindow::closeExtendedWindow() {
 
 void ToolWindow::dockMainWindow() {
     if (inWindowNav()) {
-        const int toolbarWidth = 54;
+        // This window stays hidden; the title bar is in the main window,
+        // above the guest screen.
         if (auto* area = qobject_cast<EmulatorContainer*>(parentWidget())) {
-            area->setLeanToolbarWidth(toolbarWidth);
-            const QRect frame = area->frameGeometry();
-            move(frame.right() + TOOL_GAP_FRAMED - width() + 1,
-                 frame.top() + mEmulatorWindow->getTopTransparency());
-            positionWindowNavColumn();
+            area->setLeanTitleBarHeight(LeanTitleBar::kHeight);
+            positionLeanTitleBar();
         }
     } else if (leanToolbar()) {
         const int toolbarHeight = std::max(1, parentWidget()->height() -
@@ -1776,10 +1766,6 @@ bool ToolWindow::isLeanToolbar() const {
     return leanToolbar();
 }
 
-int ToolWindow::leanToolbarWidth() const {
-    return inWindowNav() ? 54 : (leanToolbar() ? std::max(1, sizeHint().width()) : 0);
-}
-
 bool ToolWindow::safeShutdownInProgress() const {
     return mEmulatorWindow && mEmulatorWindow->safeShutdownInProgress();
 }
@@ -1794,16 +1780,8 @@ void ToolWindow::updateTheme(const QString& styleSheet) {
             [&] { mVirtualSceneControlWindow.get()->updateTheme(styleSheet); });
     mTouchpadWindow.ifExists(
             [&] { mTouchpadWindow.get()->setStyleSheet(styleSheet); });
+    // The lean title bar keeps its own dark palette whatever the theme.
     setStyleSheet(styleSheet);
-    if (mWindowNavColumn) {
-        mWindowNavColumn->setStyleSheet(QStringLiteral(
-                "#windowNavColumn { background: #20212D; }"
-                "#windowNavColumn QPushButton { background: #20212D; color: #E8E8EC; border: 0; }"
-                "#windowNavColumn QPushButton:hover { background: #303142; }"
-                "#windowNavColumn QPushButton:pressed { background: #3B3D52; }"
-                "#windowNavColumn QPushButton:disabled { color: #777985; background: #20212D; }"));
-        remaskButtons();
-    }
 }
 
 // static
@@ -2103,10 +2081,8 @@ void ToolWindow::beginLeanSafeShutdown(bool hideWindows) {
     for (QPushButton* button : findChildren<QPushButton*>()) {
         button->setEnabled(false);
     }
-    if (mWindowNavColumn) {
-        for (QPushButton* button : mWindowNavColumn->findChildren<QPushButton*>()) {
-            button->setEnabled(false);
-        }
+    if (mLeanTitleBar) {
+        mLeanTitleBar->setButtonsEnabled(false);
     }
     // Snapshot saves and loads from the extended controls would race the
     // shutdown when the windows stay up.
@@ -2943,10 +2919,7 @@ WorkerProcessingResult ToolWindow::foldableSyncToAndroidItemFunction(
 }
 
 void ToolWindow::remaskButtons() {
-    QList<QPushButton*> buttons = findChildren<QPushButton*>();
-    if (mWindowNavColumn) {
-        buttons += mWindowNavColumn->findChildren<QPushButton*>();
-    }
+    const QList<QPushButton*> buttons = findChildren<QPushButton*>();
     for (QPushButton* button : buttons) {
         const QString icon_name = button->property("themeIconName").toString();
         if (!icon_name.isNull()) {

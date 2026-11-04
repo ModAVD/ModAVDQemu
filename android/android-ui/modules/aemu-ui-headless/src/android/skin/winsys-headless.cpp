@@ -187,6 +187,11 @@ extern void* skin_winsys_get_window_handle() {
     return nullptr;
 }
 
+extern void skin_winsys_get_content_offset(int* x, int* y) {
+    *x = 0;
+    *y = 0;
+}
+
 extern void skin_winsys_get_window_pos(int* x, int* y) {
     D("skin_winsys_get_window_pos (noqt)");
     *x = 0;

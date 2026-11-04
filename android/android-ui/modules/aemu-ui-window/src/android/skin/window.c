@@ -1565,9 +1565,14 @@ typedef struct {
 
 static void skin_window_run_opengles_show(void* p) {
     gles_show_data* data = p;
+    // The subwindow is a child of the whole window; the layout places it in
+    // the guest screen's area, which may start below a title bar.
+    int dx = 0;
+    int dy = 0;
+    skin_winsys_get_content_offset(&dx, &dy);
     data->window->win_funcs->opengles_show(
-            skin_winsys_get_window_handle(), data->wx, data->wy, data->ww,
-            data->wh, data->fbw, data->fbh, data->dpr, data->rot,
+            skin_winsys_get_window_handle(), data->wx + dx, data->wy + dy,
+            data->ww, data->wh, data->fbw, data->fbh, data->dpr, data->rot,
             data->deleteExisting);
     AFREE(data);
 }

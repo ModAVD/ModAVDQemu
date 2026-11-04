@@ -1,3 +1,19 @@
+# ModAVD#58: the window title and the lean window's frame arithmetic, without a
+# windowing system, so that they can be tested on their own.
+android_add_library(
+  TARGET aemu-ui-lean-window
+  LICENSE Apache-2.0
+  SOURCE_DIR src
+  INCLUDES include
+  SRC android/instance-window-title.c android/lean-window-frame.cpp)
+
+android_add_test(
+  TARGET aemu-ui-lean-window_unittests
+  SOURCE_DIR test
+  SRC android/instance-window-title_unittest.cpp
+      android/lean-window-frame_unittest.cpp
+  DEPS aemu-ui-lean-window gmock_main)
+
 android_qt_lib(
   TARGET aemu-ui-window
   # SHARED
@@ -5,6 +21,7 @@ android_qt_lib(
   SRC android/emulator-environment.cpp android/emulator-window.c android/main-common-ui.c android/resource.c
       android/skin/ui.c android/skin/user-config.c android/skin/window.c
   DEPS aemu-gl-init
+       aemu-ui-lean-window
        aemu-gl-init
        aemu-recording
        android-emu-agents

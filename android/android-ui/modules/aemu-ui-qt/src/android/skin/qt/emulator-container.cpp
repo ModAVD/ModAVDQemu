@@ -29,6 +29,7 @@
 #include <QTimer>
 #include <QVector2D>      // for QVector2D
 #include <algorithm>      // for min, find, max
+#include <cmath>          // for lround
 #include <functional>     // for __base
 #include <tuple>          // for tuple
 #include <utility>        // for move
@@ -61,10 +62,40 @@ class QStyle;
 #endif
 
 #if defined(_WIN32)
+#include "android/skin/qt/lean-title-bar.h"
+#include "android/skin/qt/windows-lean-frame.h"
 #include "android/skin/qt/windows-native-window.h"
 #endif
 
 static constexpr int kEventBufferSize = 8;
+
+#ifdef _WIN32
+// The lean window's title bar and guest screen, as WindowsLeanFrame needs
+// them, in device pixels.
+static WindowsLeanFrame::Geometry leanFrameGeometry(
+        const EmulatorContainer* container,
+        const EmulatorQtWindow* window) {
+    WindowsLeanFrame::Geometry g;
+    g.scale = container->devicePixelRatioF();
+    const auto device = [&g](int logical) {
+        return static_cast<int>(std::lround(logical * g.scale));
+    };
+    g.titleHeight = device(ToolWindow::windowChrome().height());
+    const LeanTitleBar* titleBar =
+            window->toolWindow() ? window->toolWindow()->leanTitleBar() : nullptr;
+    g.buttonsLeft = device(titleBar ? titleBar->buttonsLeft()
+                                    : container->width());
+    // The guest screen widget has the guest's shape, scaled.
+    if (window->width() > 0 && window->height() > 0) {
+        g.guestAspect = static_cast<double>(window->width()) / window->height();
+    }
+    const QSize minGuest =
+            container->minimumSize() - ToolWindow::windowChrome();
+    g.minGuestWidth = std::max(1, device(minGuest.width()));
+    g.minGuestHeight = std::max(1, device(minGuest.height()));
+    return g;
+}
+#endif
 
 EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
     : mEmulatorWindow(window), mMessages(this) {
@@ -80,13 +111,22 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
     setWindowFlags(Qt::WindowTitleHint | Qt::Window);
 #else
     const bool lean = ToolWindow::inWindowNav();
-    setWindowFlags(Qt::WindowTitleHint | Qt::Window | Qt::CustomizeWindowHint |
-                   (lean ? (Qt::WindowSystemMenuHint |
-                            Qt::WindowMinimizeButtonHint |
-                            Qt::WindowCloseButtonHint)
-                         : Qt::WindowFlags()));
     if (lean) {
+        setWindowFlags(kLeanWindowFlags);
         setStyleSheet(QStringLiteral("EmulatorContainer { background: #20212D; }"));
+#ifdef _WIN32
+        mLeanFrame = std::make_unique<WindowsLeanFrame>(
+                [this] { return leanFrameGeometry(this, mEmulatorWindow); },
+                [this] {
+                    // The window was resized by hand: fit the guest screen to
+                    // it, as after the system's resizing.
+                    stopResizeTimer();
+                    mEmulatorWindow->doResize(mEmulatorWindow->guestAreaSize());
+                });
+#endif
+    } else {
+        setWindowFlags(Qt::WindowTitleHint | Qt::Window |
+                       Qt::CustomizeWindowHint);
     }
 #endif
 
@@ -190,6 +230,12 @@ EmulatorContainer::~EmulatorContainer() {
 }
 
 bool EmulatorContainer::event(QEvent* e) {
+#ifdef _WIN32
+    if (e->type() == QEvent::WinIdChange && mLeanFrame) {
+        // A new native window gets the frame once Qt is done with it.
+        QTimer::singleShot(0, this, [this] { applyLeanFrame(); });
+    }
+#endif
     // Ignore MetaCall and UpdateRequest events, and don't snap in zoom mode.
     if (mEmulatorWindow->isInZoomMode() || e->type() == QEvent::MetaCall ||
         e->type() == QEvent::UpdateRequest) {
@@ -457,17 +503,15 @@ bool EmulatorContainer::viewportEvent(QEvent* event) {
 
 void EmulatorContainer::showEvent(QShowEvent* event) {
 #ifdef _WIN32
-    if (ToolWindow::inWindowNav()) {
-        setDarkTitleBar(effectiveWinId());
-        if (!mDarkTitleBarConnected) {
-            mDarkTitleBarConnected = true;
+    if (mLeanFrame) {
+        applyLeanFrame();
+        if (!mLeanFrameThemeConnected) {
+            mLeanFrameThemeConnected = true;
+            // The dark border, if Windows changes it with the theme.
             QObject::connect(QGuiApplication::styleHints(),
                              &QStyleHints::colorSchemeChanged, this, [this] {
-                                 QTimer::singleShot(0, this, [this] {
-                                     if (ToolWindow::inWindowNav()) {
-                                         setDarkTitleBar(effectiveWinId());
-                                     }
-                                 });
+                                 QTimer::singleShot(0, this,
+                                                    [this] { applyLeanFrame(); });
                              });
         }
     }
@@ -566,12 +610,28 @@ void EmulatorContainer::stopResizeTimer() {
     mResizeTimer.stop();
 }
 
-QSize EmulatorContainer::viewportSize() const {
-    QSize output = this->size();
-
-    if (ToolWindow::inWindowNav()) {
-        output.rwidth() -= 54;
+void EmulatorContainer::applyLeanFrame() {
+#ifdef _WIN32
+    if (mLeanFrame && internalWinId()) {
+        WindowsLeanFrame::apply(internalWinId());
     }
+#endif
+}
+
+bool EmulatorContainer::nativeEvent(const QByteArray& eventType,
+                                    void* message,
+                                    qintptr* result) {
+#ifdef _WIN32
+    if (mLeanFrame && eventType == "windows_generic_MSG" &&
+        mLeanFrame->handleMessage(message, result)) {
+        return true;
+    }
+#endif
+    return QScrollArea::nativeEvent(eventType, message, result);
+}
+
+QSize EmulatorContainer::viewportSize() const {
+    QSize output = this->size() - ToolWindow::windowChrome();
 
     QScrollBar* vertical = this->verticalScrollBar();
     output.setWidth(output.width() -
@@ -741,8 +801,10 @@ void EmulatorContainer::adjustMessagesOverlayGeometry() {
                                          (width() - 2 * 150 * scaleFactor)));
     mMessages->setFixedWidth(w);
     mMessages->adjustSize();
+    // Below the lean title bar, at the top of the guest screen.
     mMessages->move(mapToGlobal(QPoint()) +=
-                    {(width() - mMessages->width()) / 2, 0});
+                    {(width() - mMessages->width()) / 2,
+                     ToolWindow::windowChrome().height()});
 }
 
 void EmulatorContainer::adjustGlassesStatusOverlayGeometry() {

@@ -12,10 +12,7 @@
 
 #pragma once
 
-#include <qwindowdefs.h>
-
 #ifdef __cplusplus
 extern "C"
 #endif
 int numHeldMouseButtons();
-void setDarkTitleBar(WId wid);

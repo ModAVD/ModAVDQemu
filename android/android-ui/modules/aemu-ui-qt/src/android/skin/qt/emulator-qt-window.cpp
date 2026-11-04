@@ -1837,15 +1837,19 @@ void EmulatorQtWindow::maskWindowFrame() {
     flags &= ~FRAME_WINDOW_FLAGS_MASK;
     flags |= (haveFrame ? FRAMED_WINDOW_FLAGS : FRAMELESS_WINDOW_FLAGS);
 #ifdef _WIN32
-    if (ToolWindow::inWindowNav() && haveFrame) {
-        flags |= Qt::WindowSystemMenuHint | Qt::WindowMinimizeButtonHint |
-                 Qt::WindowCloseButtonHint;
-        flags &= ~Qt::WindowMaximizeButtonHint;
+    if (ToolWindow::inWindowNav()) {
+        // The lean window draws its own title bar (ModAVD#58); see
+        // EmulatorContainer::kLeanWindowFlags.
+        flags &= ~(FRAME_WINDOW_FLAGS_MASK | Qt::WindowMaximizeButtonHint |
+                   Qt::WindowCloseButtonHint);
+        flags |= EmulatorContainer::kLeanWindowFlags;
     }
 #endif
 
     if (!ToolWindow::inWindowNav() || mContainer.windowFlags() != flags) {
         mContainer.setWindowFlags(flags);
+        // Qt has set the window style anew.
+        mContainer.applyLeanFrame();
     }
 
     // Re-generate and apply the mask
@@ -2708,10 +2712,8 @@ void EmulatorQtWindow::slot_setWindowPos(int x, int y, QSemaphore* semaphore) {
 
 void EmulatorQtWindow::slot_setWindowSize(int w, int h, QSemaphore* semaphore) {
     QSemaphoreReleaser semReleaser(semaphore);
-    if (ToolWindow::inWindowNav()) {
-        w += 54;
-    }
-    mContainer.resize(w, h);
+    const QSize chrome = ToolWindow::windowChrome();
+    mContainer.resize(w + chrome.width(), h + chrome.height());
 }
 
 void EmulatorQtWindow::slot_paintWindowOverlayForResize(int mouseX,
@@ -2791,22 +2793,23 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
     showNormal();
     setFixedSize(rect.size());
 
-    const int guestMinimumWidth = mContainer.minimumWidth() -
-                                  (ToolWindow::inWindowNav() ? 54 : 0);
+    const QSize chrome = ToolWindow::windowChrome();
+    const int guestMinimumWidth = mContainer.minimumWidth() - chrome.width();
+    const int guestMinimumHeight = mContainer.minimumHeight() - chrome.height();
     if (rect.width() < guestMinimumWidth ||
-        rect.height() < mContainer.minimumHeight()) {
+        rect.height() < guestMinimumHeight) {
         // We're trying to go smaller than the container will allow.
         // Increase our size to the container's minimum.
         double horizIncreaseFactor =
                 (double)guestMinimumWidth / rect.width();
         double vertIncreaseFactor =
-                (double)(mContainer.minimumHeight()) / rect.height();
+                (double)guestMinimumHeight / rect.height();
         if (horizIncreaseFactor > vertIncreaseFactor) {
             rect.setWidth(guestMinimumWidth);
             rect.setHeight((int)(horizIncreaseFactor * rect.height()));
         } else {
             rect.setWidth((int)(vertIncreaseFactor * rect.width()));
-            rect.setHeight(mContainer.minimumHeight());
+            rect.setHeight(guestMinimumHeight);
         }
     }
 
@@ -2816,11 +2819,7 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
         mContainer.stopResizeTimer();
         recenterFocusPoint();
     } else if (!mNextIsZoom) {
-        QSize containerSize = rect.size();
-        if (ToolWindow::inWindowNav()) {
-            containerSize.rwidth() += 54;
-        }
-        mContainer.resize(containerSize);
+        mContainer.resize(rect.size() + chrome);
     }
     mNextIsZoom = false;
 
@@ -3101,12 +3100,11 @@ void EmulatorQtWindow::doResize(const QSize& size, bool isKbdShortcut) {
         QRect screenDimensions;
         slot_getScreenDimensions(&screenDimensions);
 
-        const int screenWidth = screenDimensions.width() -
-                                (ToolWindow::inWindowNav() ? 54 : 0);
-        if (newSize.width() > screenWidth ||
-            newSize.height() > screenDimensions.height()) {
-            newSize.scale(QSize(screenWidth, screenDimensions.height()),
-                          Qt::KeepAspectRatio);
+        const QSize screenArea =
+                screenDimensions.size() - ToolWindow::windowChrome();
+        if (newSize.width() > screenArea.width() ||
+            newSize.height() > screenArea.height()) {
+            newSize.scale(screenArea, Qt::KeepAspectRatio);
         }
     }
 
@@ -3235,10 +3233,10 @@ void EmulatorQtWindow::resizeAndChangeAspectRatio(bool isFolded) {
     setDisplayRegionAndUpdate(0, 0, backingSize.width(), backingSize.height());
     simulateSetScale(std::max(.2, (double)scale));
     QRect containerGeo = mContainer.geometry();
+    const QSize chrome = ToolWindow::windowChrome();
     mContainer.setGeometry(containerGeo.x(), containerGeo.y(),
-                           windowGeo.width() +
-                                   (ToolWindow::inWindowNav() ? 54 : 0),
-                           windowGeo.height());
+                           windowGeo.width() + chrome.width(),
+                           windowGeo.height() + chrome.height());
 }
 
 void EmulatorQtWindow::resizeAndChangeAspectRatio(int x,
@@ -3272,10 +3270,10 @@ void EmulatorQtWindow::resizeAndChangeAspectRatio(int x,
     setDisplayRegionAndUpdate(x, y, backingSize.width(), backingSize.height());
     simulateSetScale(std::max(.2, (double)scale));
     QRect containerGeo = mContainer.geometry();
+    const QSize chrome = ToolWindow::windowChrome();
     mContainer.setGeometry(containerGeo.x(), containerGeo.y(),
-                           windowGeo.width() +
-                                   (ToolWindow::inWindowNav() ? 54 : 0),
-                           windowGeo.height());
+                           windowGeo.width() + chrome.width(),
+                           windowGeo.height() + chrome.height());
 }
 
 SkinMouseButtonType EmulatorQtWindow::getSkinMouseButton(
@@ -4136,7 +4134,8 @@ void EmulatorQtWindow::simulateWindowMoved(const QPoint& pos) {
     event.u.window.y = pos.y();
     queueSkinEvent(std::move(event));
 
-    mOverlay.move(mContainer.mapToGlobal(QPoint()));
+    // Over the guest screen, which may start below a title bar.
+    mOverlay.move(mContainer.mapToGlobal(contentOffset()));
 }
 
 void EmulatorQtWindow::simulateZoomedWindowResized(const QSize& size) {
@@ -4215,11 +4214,13 @@ EmulatorContainer* EmulatorQtWindow::containerWindow() {
 }
 
 QSize EmulatorQtWindow::guestAreaSize() const {
-    QSize size = mContainer.size();
-    if (ToolWindow::inWindowNav()) {
-        size.rwidth() -= 54;
-    }
-    return size;
+    return mContainer.size() - ToolWindow::windowChrome();
+}
+
+QPoint EmulatorQtWindow::contentOffset() const {
+    // The scroll area's viewport: below the lean title bar, at (0, 0) without
+    // one. Scrolling inside it is the skin's to add.
+    return mContainer.viewport()->pos();
 }
 
 void EmulatorQtWindow::showZoomIfNotUserHidden() {

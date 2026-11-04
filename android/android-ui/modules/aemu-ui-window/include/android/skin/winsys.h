@@ -29,6 +29,12 @@ extern "C" {
 // Return window handle of main UI. MUST BE CALLED FROM THE MAIN UI THREAD.
 void* skin_winsys_get_window_handle();
 
+// Where the guest screen's area starts inside the window of
+// skin_winsys_get_window_handle(), in logical pixels: below the title bar the
+// lean window draws itself (ModAVD#58), at the window's top-left otherwise.
+// MUST BE CALLED FROM THE MAIN UI THREAD.
+void skin_winsys_get_content_offset(int* x, int* y);
+
 // Return rectangle of current monitor in pixels.
 void skin_winsys_get_monitor_rect(SkinRect* rect);
 

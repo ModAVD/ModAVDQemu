@@ -30,6 +30,7 @@
 #include "android/emulation/control/user_event_agent.h"
 #include "android/emulation/resizable_display_config.h"
 #include "android/hw-sensors.h"
+#include "android/instance-window-title.h"
 #include "android/network/globals.h"
 #include "android/skin/keycode.h"
 #include "android/skin/trackball.h"
@@ -74,8 +75,7 @@ extern bool emulator_window_load_environment();
 // ModAVD titles the window with the instance's name alone: the name the
 // manager shows, which it keeps as avd.ini.displayname in the AVD's
 // config.ini. Without one, or with an empty one, the AVD name stands in. The
-// console port is left out. skin_ui_update_title copies the title into 128
-// bytes, so a long name is cut there, between UTF-8 characters.
+// console port is left out. See instance_window_title().
 static void write_window_name(char* buff,
                               size_t buff_len,
                               int base_port,
@@ -86,24 +86,7 @@ static void write_window_name(char* buff,
     char* display_name =
             config ? iniFile_getString(config, "avd.ini.displayname", NULL)
                    : NULL;
-    const char* name = avd_name ? avd_name : "";
-    if (display_name) {
-        const char* trimmed = display_name + strspn(display_name, " \t");
-        if (*trimmed) {
-            name = trimmed;
-        }
-    }
-    size_t len = strlen(name);
-    const size_t max_len = (buff_len < 128 ? buff_len : 128) - 1;
-    if (len > max_len) {
-        len = max_len;
-        // Back up to the first byte of a UTF-8 sequence.
-        while (len > 0 && ((unsigned char)name[len] & 0xC0) == 0x80) {
-            --len;
-        }
-    }
-    memcpy(buff, name, len);
-    buff[len] = '\0';
+    instance_window_title(display_name, avd_name, buff, buff_len);
     free(display_name);
 }
 

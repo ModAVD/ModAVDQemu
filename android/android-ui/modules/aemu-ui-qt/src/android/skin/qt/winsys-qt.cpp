@@ -364,6 +364,19 @@ extern void* skin_winsys_get_window_handle() {
     return (void*)handle;
 }
 
+extern void skin_winsys_get_content_offset(int* x, int* y) {
+    *x = 0;
+    *y = 0;
+    EmulatorQtWindow* window = EmulatorQtWindow::getInstance();
+    if (window == NULL) {
+        D("%s: Could not get window handle", __FUNCTION__);
+        return;
+    }
+    const QPoint offset = window->contentOffset();
+    *x = offset.x();
+    *y = offset.y();
+}
+
 extern void skin_winsys_get_window_pos(int* x, int* y) {
     D("skin_winsys_get_window_pos");
     GlobalState* g = globalState();
