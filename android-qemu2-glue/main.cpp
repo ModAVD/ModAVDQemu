@@ -533,21 +533,31 @@ static void replaceDefaultPath(AvdInfo* avd,
 }
 
 #ifdef _WIN32
-// MAS local: whether the volume holding |dir| supports sparse files (NTFS and
-// ReFS do; FAT32 and exFAT do not, and there the raw ext4 image is allocated in
-// full while it is built).
-static bool volumeSupportsSparseFiles(const std::string& dir) {
+enum class UserDataVolumeKind { Other, Sparse, Fat32, ExFat };
+
+static UserDataVolumeKind userDataVolumeKind(const std::string& dir) {
     Win32UnicodeString wdir(dir);
     wchar_t volume[MAX_PATH + 1] = {};
     if (!GetVolumePathNameW(wdir.c_str(), volume, MAX_PATH + 1)) {
-        return false;
+        return UserDataVolumeKind::Other;
     }
     DWORD flags = 0;
+    wchar_t fileSystem[MAX_PATH + 1] = {};
     if (!GetVolumeInformationW(volume, nullptr, 0, nullptr, nullptr, &flags,
-                               nullptr, 0)) {
-        return false;
+                               fileSystem, MAX_PATH + 1)) {
+        return UserDataVolumeKind::Other;
     }
-    return (flags & FILE_SUPPORTS_SPARSE_FILES) != 0;
+    // Preserve the existing capability-based policy, including ReFS.
+    if (flags & FILE_SUPPORTS_SPARSE_FILES) {
+        return UserDataVolumeKind::Sparse;
+    }
+    if (_wcsicmp(fileSystem, L"FAT32") == 0) {
+        return UserDataVolumeKind::Fat32;
+    }
+    if (_wcsicmp(fileSystem, L"exFAT") == 0) {
+        return UserDataVolumeKind::ExFat;
+    }
+    return UserDataVolumeKind::Other;
 }
 #endif
 
@@ -2672,24 +2682,59 @@ extern "C" int main(int argc, char** argv) {
                                         ->settings->hw()
                                         ->disk_dataPartition_size /
                                 (1024.0 * 1024.0);
+                double available = (double)availableSpace / (1024.0 * 1024.0);
+                bool insufficientSpace = needed > available;
 #ifdef _WIN32
-                // MAS local: the data partition is a qcow2 that grows with
-                // what the guest writes, and on a volume with sparse files
-                // building it no longer needs room for the whole size (see
-                // convertExt4ToQcow2: measured 10-16, 141 MB of ext4 metadata
-                // for a 16 GB partition). 1.2 x the size (77 GB for the
-                // 64 GB default) turned testers away; ask for 10 GB there.
-                // Running out of space later is the launcher's to warn about.
-                constexpr double kSparseVolumeNeededMb = 10 * 1024.0;
-                if (needed > kSparseVolumeNeededMb &&
-                    volumeSupportsSparseFiles(*dataPartitionPathAsDir)) {
-                    needed = kSparseVolumeNeededMb;
+                const auto volume = userDataVolumeKind(*dataPartitionPathAsDir);
+                if (volume == UserDataVolumeKind::Sparse) {
+                    constexpr double kSparseVolumeNeededMb = 10 * 1024.0;
+                    needed = std::min(needed, kSparseVolumeNeededMb);
+                    insufficientSpace = needed > available;
+                } else if ((volume == UserDataVolumeKind::Fat32 ||
+                            volume == UserDataVolumeKind::ExFat) &&
+                           hw->disk_dataPartition_size > 0) {
+                    const uint64_t rawSize = hw->disk_dataPartition_size;
+                    if (volume == UserDataVolumeKind::Fat32 &&
+                        rawSize > 0xffffffffULL) {
+                        android_panic("Cannot create userdata partition on FAT32: "
+                                      "the temporary raw image exceeds the "
+                                      "4 GiB - 1 byte file limit. Move the "
+                                      "instance to an NTFS or exFAT volume.");
+                        return 1;
+                    }
+
+                    // libsparse cannot make holes here: the temporary raw
+                    // image needs its full size, including inode tables and
+                    // the journal. Also budget the simultaneous temporary
+                    // qcow2: seed data, written ext4 metadata and qcow2
+                    // overhead, plus cache files and allocation rounding.
+                    // Keep at least 512 MiB, growing with large partitions;
+                    // this conservative margin is not measured on FAT yet.
+                    const uint64_t workingSpace = std::max<uint64_t>(
+                            512ULL * 1024 * 1024, rawSize / 64);
+                    uint64_t seedSize = 0;
+                    ScopedCPtr<char> initDir(avdInfo_getDataInitDirPath(avd));
+                    if (initDir.get() && path_exists(initDir.get())) {
+                        seedSize = System::get()->recursiveSize(initDir.get());
+                    }
+                    // Keep room for the copy fallback if ext4 creation fails.
+                    uint64_t initImageSize = 0;
+                    if (hw->disk_dataPartition_initPath &&
+                        System::get()->pathFileSize(
+                                hw->disk_dataPartition_initPath, &initImageSize)) {
+                        seedSize = std::max(seedSize, initImageSize);
+                    }
+                    // Subtract only after checking each term, so neither a
+                    // sum overflow nor MB rounding can hide a space deficit.
+                    insufficientSpace = availableSpace < rawSize ||
+                            availableSpace - rawSize < workingSpace ||
+                            availableSpace - rawSize - workingSpace < seedSize;
+                    needed = (double(rawSize) + double(workingSpace) +
+                              double(seedSize)) / (1024.0 * 1024.0);
                 }
 #endif
 
-                double available = (double)availableSpace / (1024.0 * 1024.0);
-
-                if (needed > available) {
+                if (insufficientSpace) {
                     android_panic(
                             "Not enough space to create userdata partition. "
                             "Available: %.2f MB at %s, "
