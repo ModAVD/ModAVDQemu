@@ -293,3 +293,12 @@ TEST(LeanWindowFrame, RefusedSysCommands) {
         EXPECT_FALSE(lw::refusesSysCommand(command)) << std::hex << command;
     }
 }
+
+TEST(LeanWindowFrame, OnlyMovesWithTheLeftButtonDrag) {
+    EXPECT_TRUE(lw::movesDrag(0x0001));           // MK_LBUTTON
+    EXPECT_TRUE(lw::movesDrag(0x0001 | 0x0004));  // with MK_SHIFT
+    EXPECT_TRUE(lw::movesDrag(0x0001 | 0x0002));  // with MK_RBUTTON
+    EXPECT_FALSE(lw::movesDrag(0));
+    EXPECT_FALSE(lw::movesDrag(0x0002));  // MK_RBUTTON alone
+    EXPECT_FALSE(lw::movesDrag(0x0004 | 0x0008 | 0x0010));  // shift, control, middle
+}

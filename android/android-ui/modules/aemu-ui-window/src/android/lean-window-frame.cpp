@@ -166,5 +166,10 @@ bool refusesSysCommand(unsigned wparam) {
     return command == kScMaximize || command == kScMove || command == kScSize;
 }
 
+bool movesDrag(unsigned keys) {
+    constexpr unsigned kLeftButton = 0x0001;  // MK_LBUTTON
+    return (keys & kLeftButton) != 0;
+}
+
 }  // namespace lean_window
 }  // namespace android

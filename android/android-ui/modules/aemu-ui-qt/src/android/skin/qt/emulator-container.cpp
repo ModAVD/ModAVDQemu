@@ -145,11 +145,17 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
 #ifdef _WIN32
         mLeanFrame = std::make_unique<WindowsLeanFrame>(
                 [this] { return leanFrameGeometry(this, mEmulatorWindow); },
-                [this] {
+                [this](int width, int height) {
                     // The window was resized by hand: fit the guest screen to
-                    // it, as after the system's resizing.
+                    // it, as after the system's resizing. From the native
+                    // size: Qt may not have passed the last geometry change
+                    // on to the widget yet, and size() would be older.
                     stopResizeTimer();
-                    mEmulatorWindow->doResize(mEmulatorWindow->guestAreaSize());
+                    const double dpr = devicePixelRatioF();
+                    const QSize window(static_cast<int>(std::lround(width / dpr)),
+                                       static_cast<int>(std::lround(height / dpr)));
+                    mEmulatorWindow->doResize(window -
+                                              ToolWindow::windowChrome());
                 });
 #endif
     } else {

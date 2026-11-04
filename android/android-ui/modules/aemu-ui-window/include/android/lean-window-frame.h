@@ -128,5 +128,11 @@ std::vector<int> systemMenuItemsToDelete(const std::vector<unsigned>& ids);
 // system's move and size loops and with them Snap.
 bool refusesSysCommand(unsigned wparam);
 
+// Whether a mouse move with the key state |keys| (the WM_MOUSEMOVE wParam)
+// belongs to a drag of the title bar or an edge: only while the left button is
+// down. Windows also sends moves at the real cursor when the window changes
+// under it; with the button up they are not part of the drag.
+bool movesDrag(unsigned keys);
+
 }  // namespace lean_window
 }  // namespace android

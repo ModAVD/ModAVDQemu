@@ -92,7 +92,7 @@ void pruneSystemMenu(HWND hwnd) {
 }  // namespace
 
 WindowsLeanFrame::WindowsLeanFrame(std::function<Geometry()> geometry,
-                                   std::function<void()> resizeDone)
+                                   std::function<void(int, int)> resizeDone)
     : mGeometry(std::move(geometry)), mResizeDone(std::move(resizeDone)) {}
 
 // static
@@ -248,6 +248,11 @@ bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
             if (mMode == Mode::None) {
                 return false;
             }
+            if (msg->message == WM_MOUSEMOVE &&
+                !lw::movesDrag(static_cast<unsigned>(msg->wParam))) {
+                *result = 0;
+                return true;
+            }
             POINT cursor = {GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
             ClientToScreen(hwnd, &cursor);
             track(hwnd, cursor.x, cursor.y);
@@ -324,7 +329,8 @@ void WindowsLeanFrame::stopTracking(void* handle, bool releaseCapture) {
     if (releaseCapture && GetCapture() == hwndOf(handle)) {
         ReleaseCapture();
     }
-    if (resized && mResizeDone) {
-        mResizeDone();
+    RECT window;
+    if (resized && mResizeDone && GetWindowRect(hwndOf(handle), &window)) {
+        mResizeDone(window.right - window.left, window.bottom - window.top);
     }
 }

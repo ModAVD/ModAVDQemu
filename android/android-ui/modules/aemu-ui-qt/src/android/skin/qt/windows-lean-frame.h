@@ -43,8 +43,10 @@ public:
         int minGuestHeight = 1;
     };
 
+    // |resizeDone| gets the window's size in device pixels when a resize by
+    // an edge or a corner ends.
     WindowsLeanFrame(std::function<Geometry()> geometry,
-                     std::function<void()> resizeDone);
+                     std::function<void(int width, int height)> resizeDone);
 
     // Gives the native window |wid| its frame: the caption style without the
     // resizable frame and the maximize box, the frame extended into the
@@ -71,7 +73,7 @@ private:
     void stopTracking(void* hwnd, bool releaseCapture);
 
     std::function<Geometry()> mGeometry;
-    std::function<void()> mResizeDone;
+    std::function<void(int width, int height)> mResizeDone;
     Mode mMode = Mode::None;
     android::lean_window::Hit mHit = android::lean_window::Hit::Nowhere;
     android::lean_window::Rect mStartRect = {0, 0, 0, 0};
