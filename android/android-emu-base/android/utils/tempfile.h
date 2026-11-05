@@ -34,6 +34,10 @@ typedef struct TempFile   TempFile;
 
 extern  TempFile*    tempfile_create( );
 extern  TempFile*    tempfile_create_with_ext( const char* ext );
+// Register an owned path for exit cleanup without creating or opening a file.
+// The path is copied and may name a file that will be created later.
+// Returns NULL for an empty path or allocation failure.
+extern  TempFile*    tempfile_register_path(const char* path);
 extern  const char*  tempfile_path( TempFile*  temp );
 extern  void         tempfile_close( TempFile*  temp );
 extern void tempfile_unref_and_close(const char* temp);

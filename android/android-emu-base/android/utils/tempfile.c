@@ -121,9 +121,26 @@ tempfile_create_with_ext( const char* ext )
     close(tempfd);
     tempname = template;
 #endif
-    tempfile = malloc( sizeof(*tempfile) + strlen(tempname) + 1 );
+    tempfile = tempfile_register_path(tempname);
+    if (!tempfile) {
+        android_unlink(tempname);
+    }
+    return tempfile;
+}
+
+TempFile*
+tempfile_register_path(const char* path)
+{
+    TempFile* tempfile;
+    if (!path || !*path) {
+        return NULL;
+    }
+    tempfile = malloc(sizeof(*tempfile) + strlen(path) + 1);
+    if (!tempfile) {
+        return NULL;
+    }
     tempfile->name = (char*)(tempfile + 1);
-    strcpy( (char*)tempfile->name, tempname );
+    strcpy((char*)tempfile->name, path);
 
     tempfile->next = _all_tempfiles;
     _all_tempfiles = tempfile;

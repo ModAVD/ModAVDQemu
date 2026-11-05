@@ -2849,8 +2849,13 @@ extern "C" int main(int argc, char** argv) {
     // Make sure there's a temp cache partition if there wasn't a permanent one
     if ((!hw->disk_cachePartition_path ||
          strcmp(hw->disk_cachePartition_path, "") == 0)) {
-        str_reset(&hw->disk_cachePartition_path,
-                  tempfile_path(tempfile_create()));
+        const char* cachePath = tempfile_path(tempfile_create());
+        if (!cachePath ||
+            !tempfile_register_path((std::string(cachePath) + ".qcow2").c_str())) {
+            android_panic("Could not register temporary cache files for cleanup");
+            return 1;
+        }
+        str_reset(&hw->disk_cachePartition_path, cachePath);
         createEmptyCacheFile = true;
     }
 
