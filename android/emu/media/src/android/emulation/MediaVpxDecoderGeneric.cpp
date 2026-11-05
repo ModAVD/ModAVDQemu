@@ -396,7 +396,6 @@ void MediaVpxDecoderGeneric::oneShotDecode(const uint8_t* data,
     }
 
     decode_internal(data, len, pts);
-    mVideoHelper->decode(data, len, pts);
     while (true) {
         MediaSnapshotState::FrameInfo frame;
         bool success = mVideoHelper->receiveFrame(&frame);
