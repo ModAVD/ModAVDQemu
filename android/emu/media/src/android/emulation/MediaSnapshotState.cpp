@@ -178,8 +178,13 @@ void MediaSnapshotState::load(base::Stream* stream) {
     SNAPSTATE_DPRINT("load now ");
     for (int i = 0; i < fcount; ++i) {
         SNAPSTATE_DPRINT("load now ");
-        loadFrameInfo(stream, savedDecodedFrame);
-        savedFrames.push_back(std::move(savedDecodedFrame));
+        FrameInfo frame{};
+        loadFrameInfo(stream, frame);
+        // Texture names belong to the old GL context. Only frames with
+        // saved pixels can be delivered after loading the snapshot.
+        if (!frame.data.empty()) {
+            savedFrames.push_back(std::move(frame));
+        }
     }
 }
 
