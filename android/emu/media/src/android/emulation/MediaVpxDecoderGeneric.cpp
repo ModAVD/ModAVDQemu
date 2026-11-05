@@ -322,7 +322,7 @@ void MediaVpxDecoderGeneric::getImage(void* ptr) {
     if (mParser.version() == 200) {
         VPX_DPRINT("calling rendering to host side color buffer with id %d",
                    param.hostColorBufferId);
-        if (mUseGpuTexture && pFrame->texture[0] > 0 &&
+        if (pFrame->texture.size() >= 2 && pFrame->texture[0] > 0 &&
             pFrame->texture[1] > 0) {
             VPX_DPRINT(
                     "calling rendering to host side color buffer with id %d "
