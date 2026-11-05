@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "host-common/MediaH264DecoderDefault.h"
+#include "android/emulation/MediaH264DecoderDefault.h"
 #include "android/base/system/System.h"
 #include "host-common/H264PingInfoParser.h"
 #include "host-common/MediaH264DecoderGeneric.h"
@@ -43,6 +43,12 @@ MediaH264DecoderPlugin* makeDecoderPlugin(uint64_t pluginid,
 
 }; // anon namespace
 
+
+MediaH264DecoderDefault::~MediaH264DecoderDefault() {
+    for (const auto& entry : mDecoders) {
+        delete entry.second;
+    }
+}
 
 uint64_t MediaH264DecoderDefault::readId(void* ptr) {
     if (nullptr == ptr)

@@ -47,6 +47,9 @@ MediaTexturePool::MediaTexturePool() {
 MediaTexturePool::~MediaTexturePool() {
     H264_DPRINT("destroyed texturepool");
     cleanUpTextures();
+    for (const auto& entry : m_WH_to_PoolHandle) {
+        delete entry.second;
+    }
 }
 
 const uint32_t kGlUnsignedByte = 0x1401;

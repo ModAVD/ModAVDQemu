@@ -28,7 +28,7 @@ namespace emulation {
 class MediaHevcDecoderDefault : public MediaHevcDecoder {
 public:
     MediaHevcDecoderDefault() = default;
-    virtual ~MediaHevcDecoderDefault() = default;
+    ~MediaHevcDecoderDefault() override;
 
     // This is the entry point
     virtual void handlePing(MediaCodecType type,

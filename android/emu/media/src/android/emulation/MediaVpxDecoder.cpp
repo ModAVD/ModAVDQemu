@@ -42,7 +42,7 @@ namespace {
 class MediaVpxDecoderImpl : public MediaVpxDecoder {
 public:
     MediaVpxDecoderImpl() = default;
-    virtual ~MediaVpxDecoderImpl() = default;
+    ~MediaVpxDecoderImpl() override;
     virtual void handlePing(MediaCodecType type, MediaOperation op, void* ptr) override;
 
 public:
@@ -68,6 +68,12 @@ MediaVpxDecoderPlugin* makeDecoderPlugin(uint64_t pluginid,
     return new MediaVpxDecoderGeneric(parser, type);
 }
 };  // namespace
+
+MediaVpxDecoderImpl::~MediaVpxDecoderImpl() {
+    for (const auto& entry : mDecoders) {
+        delete entry.second;
+    }
+}
 
 uint64_t MediaVpxDecoderImpl::readId(void* ptr) {
     if (nullptr == ptr)

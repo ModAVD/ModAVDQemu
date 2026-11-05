@@ -45,6 +45,12 @@ MediaHevcDecoderPlugin* makeDecoderPlugin(uint64_t pluginid,
 
 };  // namespace
 
+MediaHevcDecoderDefault::~MediaHevcDecoderDefault() {
+    for (const auto& entry : mDecoders) {
+        delete entry.second;
+    }
+}
+
 uint64_t MediaHevcDecoderDefault::readId(void* ptr) {
     if (nullptr == ptr)
         return 0;
