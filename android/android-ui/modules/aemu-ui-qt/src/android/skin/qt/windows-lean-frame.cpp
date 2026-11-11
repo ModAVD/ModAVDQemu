@@ -213,6 +213,17 @@ bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
             return true;
         }
 
+        case WM_MOUSEACTIVATE:
+            // DefWindowProc answers MA_NOACTIVATE for the caption: a normal
+            // window is activated and raised later, by DefWindowProc's own
+            // WM_NCLBUTTONDOWN(HTCAPTION), which the press below never reaches.
+            // Activate here, as for a click on the picture or a border.
+            if (static_cast<short>(LOWORD(msg->lParam)) != HTCAPTION) {
+                return false;
+            }
+            *result = MA_ACTIVATE;
+            return true;
+
         case WM_NCLBUTTONDOWN:
         case WM_NCLBUTTONDBLCLK: {
             // A double click on the title bar does not maximize; it is just
