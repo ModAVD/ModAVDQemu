@@ -1014,8 +1014,8 @@ void ToolWindow::positionLeanTitleBar() {
     if (!mLeanTitleBar || !inWindowNav()) {
         return;
     }
-    auto* container = mEmulatorWindow->containerWindow();
-    mLeanTitleBar->setGeometry(0, 0, container->width(), LeanTitleBar::kHeight);
+    mLeanTitleBar->setGeometry(
+            mEmulatorWindow->containerWindow()->leanTitleBarGeometry());
     mLeanTitleBar->raise();
 }
 

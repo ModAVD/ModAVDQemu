@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
-#include <vector>
 
 namespace lw = android::lean_window;
 
@@ -32,22 +31,8 @@ constexpr int kBorder = 5;
 constexpr int kTopBorder = 4;
 constexpr int kCorner = 16;
 
-HWND hwndOf(void* hwnd) {
-    return static_cast<HWND>(hwnd);
-}
-
 int devicePixels(double scale, int logical) {
     return std::max(1, static_cast<int>(std::lround(logical * scale)));
-}
-
-// The window's DPI scale as Windows has it, which is what it scales the window
-// by when it moves onto another screen.
-double windowScale(HWND hwnd) {
-    using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
-    static const auto getDpiForWindow = reinterpret_cast<GetDpiForWindowFn>(
-            GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
-    const UINT dpi = getDpiForWindow ? getDpiForWindow(hwnd) : 0;
-    return dpi ? dpi / 96.0 : 1.0;
 }
 
 // The IDC_SIZE* cursors, by number: this code is built without UNICODE.
@@ -67,33 +52,30 @@ const wchar_t* resizeCursor(lw::Hit hit) {
     }
 }
 
-void pruneSystemMenu(HWND hwnd) {
-    HMENU menu = GetSystemMenu(hwnd, FALSE);
-    if (!menu) {
-        return;
+lw::Rect toRect(const RECT& r) {
+    return {r.left, r.top, r.right, r.bottom};
+}
+
+// The part of the window that is on the screen: all of it, but for a
+// maximized window, which hangs over the work area by its frame.
+lw::Rect visibleRect(HWND hwnd, const RECT& window) {
+    if (!IsZoomed(hwnd)) {
+        return toRect(window);
     }
-    const int count = GetMenuItemCount(menu);
-    std::vector<unsigned> ids;
-    for (int i = 0; i < count; ++i) {
-        MENUITEMINFOW info = {};
-        info.cbSize = sizeof(info);
-        info.fMask = MIIM_FTYPE | MIIM_ID;
-        if (!GetMenuItemInfoW(menu, i, TRUE, &info)) {
-            ids.push_back(0xFFFFFFFFu);  // unknown: not kept
-            continue;
-        }
-        ids.push_back((info.fType & MFT_SEPARATOR) ? 0u : info.wID);
+    MONITORINFO info = {};
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+                         &info)) {
+        return toRect(window);
     }
-    for (int position : lw::systemMenuItemsToDelete(ids)) {
-        DeleteMenu(menu, position, MF_BYPOSITION);
-    }
+    return lw::visiblePart(toRect(window), toRect(info.rcWork));
 }
 
 }  // namespace
 
 WindowsLeanFrame::WindowsLeanFrame(std::function<Geometry()> geometry,
-                                   std::function<void(int, int)> resizeDone)
-    : mGeometry(std::move(geometry)), mResizeDone(std::move(resizeDone)) {}
+                                   std::function<void()> sizeMoveDone)
+    : mGeometry(std::move(geometry)), mSizeMoveDone(std::move(sizeMoveDone)) {}
 
 // static
 void WindowsLeanFrame::apply(WId wid) {
@@ -101,9 +83,11 @@ void WindowsLeanFrame::apply(WId wid) {
     if (!hwnd) {
         return;
     }
+    // The resizable frame and the maximize box are what let the system
+    // maximize and snap the window; neither is drawn.
     const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    const LONG_PTR wanted = (style | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX) &
-                            ~static_cast<LONG_PTR>(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    const LONG_PTR wanted = style | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
+                            WS_THICKFRAME | WS_MAXIMIZEBOX;
     if (wanted != style) {
         SetWindowLongPtrW(hwnd, GWL_STYLE, wanted);
         // Windows asks for the client area again (WM_NCCALCSIZE).
@@ -140,7 +124,6 @@ void WindowsLeanFrame::apply(WId wid) {
         }
         FreeLibrary(dwm);
     }
-    pruneSystemMenu(hwnd);
 }
 
 // static
@@ -149,13 +132,22 @@ void WindowsLeanFrame::showSystemMenu(WId wid, int x, int y) {
     if (!hwnd) {
         return;
     }
-    pruneSystemMenu(hwnd);
     HMENU menu = GetSystemMenu(hwnd, FALSE);
     if (!menu) {
         return;
     }
-    EnableMenuItem(menu, SC_MINIMIZE, MF_BYCOMMAND | MF_ENABLED);
-    EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND | MF_ENABLED);
+    // What DefWindowProc does for the menu it shows itself.
+    const bool maximized = IsZoomed(hwnd);
+    const auto enable = [menu](UINT command, bool enabled) {
+        EnableMenuItem(menu, command,
+                       MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED));
+    };
+    enable(SC_RESTORE, maximized);
+    enable(SC_MOVE, !maximized);
+    enable(SC_SIZE, !maximized);
+    enable(SC_MINIMIZE, true);
+    enable(SC_MAXIMIZE, !maximized);
+    enable(SC_CLOSE, true);
     SetMenuDefaultItem(menu, SC_CLOSE, FALSE);
     const UINT align = GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN
                                                                : TPM_LEFTALIGN;
@@ -169,13 +161,45 @@ void WindowsLeanFrame::showSystemMenu(WId wid, int x, int y) {
     }
 }
 
+// static
+WindowsLeanFrame::Overhang WindowsLeanFrame::maximizedOverhang(WId wid) {
+    HWND hwnd = reinterpret_cast<HWND>(wid);
+    RECT window;
+    if (!hwnd || !IsZoomed(hwnd) || !GetWindowRect(hwnd, &window)) {
+        return {};
+    }
+    const lw::Rect visible = visibleRect(hwnd, window);
+    return {visible.left - window.left, visible.top - window.top,
+            window.right - visible.right, window.bottom - visible.bottom};
+}
+
+// static
+bool WindowsLeanFrame::heldBySystem(WId wid) {
+    HWND hwnd = reinterpret_cast<HWND>(wid);
+    if (!hwnd) {
+        return false;
+    }
+    if (IsZoomed(hwnd)) {
+        return true;
+    }
+    // Windows 10 1903 and later.
+    using IsWindowArrangedFn = BOOL(WINAPI*)(HWND);
+    static const auto isWindowArranged = reinterpret_cast<IsWindowArrangedFn>(
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "IsWindowArranged"));
+    return isWindowArranged && isWindowArranged(hwnd);
+}
+
 bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
     MSG* msg = static_cast<MSG*>(message);
     HWND hwnd = msg->hwnd;
     switch (msg->message) {
         case WM_NCCALCSIZE:
             // The client area is the whole window, for wParam TRUE (the first
-            // rectangle stays as proposed) and FALSE alike.
+            // rectangle stays as proposed) and FALSE alike, maximized too:
+            // Qt takes the window's rectangle for the client area of a
+            // frameless window, so the two have to stay the same. The part
+            // of a maximized window that hangs over the screen is left empty
+            // instead, see maximizedOverhang().
             *result = 0;
             return true;
 
@@ -188,16 +212,21 @@ bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
                 return false;
             }
             const Geometry g = mGeometry();
-            const lw::Layout layout = {window.right - window.left,
-                                       window.bottom - window.top,
-                                       g.titleHeight,
-                                       g.buttonsLeft,
-                                       devicePixels(g.scale, kBorder),
-                                       devicePixels(g.scale, kTopBorder),
-                                       devicePixels(g.scale, kCorner)};
+            // A maximized window has no resize bands, and its title bar
+            // starts where the screen does.
+            const bool maximized = IsZoomed(hwnd);
+            const lw::Rect visible = visibleRect(hwnd, window);
+            const lw::Layout layout = {
+                    visible.width(),
+                    visible.height(),
+                    g.titleHeight,
+                    g.buttonsLeft,
+                    maximized ? 0 : devicePixels(g.scale, kBorder),
+                    maximized ? 0 : devicePixels(g.scale, kTopBorder),
+                    maximized ? 0 : devicePixels(g.scale, kCorner)};
             const lw::Hit hit =
-                    lw::hitTest(layout, GET_X_LPARAM(msg->lParam) - window.left,
-                                GET_Y_LPARAM(msg->lParam) - window.top);
+                    lw::hitTest(layout, GET_X_LPARAM(msg->lParam) - visible.left,
+                                GET_Y_LPARAM(msg->lParam) - visible.top);
             *result = static_cast<qintptr>(hit);
             return true;
         }
@@ -213,30 +242,11 @@ bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
             return true;
         }
 
-        case WM_MOUSEACTIVATE:
-            // DefWindowProc answers MA_NOACTIVATE for the caption: a normal
-            // window is activated and raised later, by DefWindowProc's own
-            // WM_NCLBUTTONDOWN(HTCAPTION), which the press below never reaches.
-            // Activate here, as for a click on the picture or a border.
-            if (static_cast<short>(LOWORD(msg->lParam)) != HTCAPTION) {
-                return false;
-            }
-            *result = MA_ACTIVATE;
-            return true;
-
-        case WM_NCLBUTTONDOWN:
-        case WM_NCLBUTTONDBLCLK: {
-            // A double click on the title bar does not maximize; it is just
-            // another press.
-            const lw::Hit hit = static_cast<lw::Hit>(msg->wParam);
-            if (hit != lw::Hit::Caption && !lw::isResize(hit)) {
-                return false;
-            }
-            startTracking(hwnd, hit, GET_X_LPARAM(msg->lParam),
-                          GET_Y_LPARAM(msg->lParam));
-            *result = 0;
-            return true;
-        }
+        // WM_NCLBUTTONDOWN and WM_NCLBUTTONDBLCLK go on to DefWindowProc: on
+        // the title bar it activates the window, moves it in the system's
+        // move loop (which snaps it at the edges of the screen and maximizes
+        // it at the top) and maximizes or restores it on a double click; on a
+        // resize band it starts the system's size loop.
 
         case WM_NCRBUTTONDOWN:
             if (msg->wParam != HTCAPTION) {
@@ -254,94 +264,39 @@ bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
             *result = 0;
             return true;
 
-        case WM_MOUSEMOVE:
-        case WM_LBUTTONUP: {
-            if (mMode == Mode::None) {
+        case WM_SIZING: {
+            // An edge or a corner is dragged: the guest screen keeps its
+            // shape.
+            const lw::Hit edge =
+                    lw::sizingEdge(static_cast<unsigned>(msg->wParam));
+            const Geometry g = mGeometry();
+            RECT* proposed = reinterpret_cast<RECT*>(msg->lParam);
+            if (!proposed || !lw::isResize(edge) || g.guestAspect <= 0) {
                 return false;
             }
-            if (msg->message == WM_MOUSEMOVE &&
-                !lw::movesDrag(static_cast<unsigned>(msg->wParam))) {
-                *result = 0;
-                return true;
-            }
-            POINT cursor = {GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
-            ClientToScreen(hwnd, &cursor);
-            track(hwnd, cursor.x, cursor.y);
-            if (msg->message == WM_LBUTTONUP) {
-                stopTracking(hwnd, true);
-            }
-            *result = 0;
+            const lw::Rect r = lw::sizingRect(toRect(*proposed), edge,
+                                              g.titleHeight, g.guestAspect,
+                                              g.minGuestWidth, g.minGuestHeight);
+            proposed->left = r.left;
+            proposed->top = r.top;
+            proposed->right = r.right;
+            proposed->bottom = r.bottom;
+            *result = TRUE;
             return true;
         }
 
-        case WM_CAPTURECHANGED:
-            if (mMode != Mode::None && reinterpret_cast<HWND>(msg->lParam) != hwnd) {
-                stopTracking(hwnd, false);
-            }
+        case WM_ENTERSIZEMOVE:
+            mInSizeMove = true;
             return false;
 
-        case WM_SYSCOMMAND:
-            if (!lw::refusesSysCommand(static_cast<unsigned>(msg->wParam))) {
-                return false;
+        case WM_EXITSIZEMOVE:
+            mInSizeMove = false;
+            if (mSizeMoveDone) {
+                mSizeMoveDone();
             }
-            *result = 0;
-            return true;
+            return false;
 
         default:
             return false;
-    }
-}
-
-void WindowsLeanFrame::startTracking(void* handle, lw::Hit hit, int x, int y) {
-    HWND hwnd = hwndOf(handle);
-    RECT window;
-    if (!GetWindowRect(hwnd, &window)) {
-        return;
-    }
-    mStartRect = {window.left, window.top, window.right, window.bottom};
-    mGrab = {x, y};
-    mHit = hit;
-    mStartScale = windowScale(hwnd);
-    mMode = hit == lw::Hit::Caption ? Mode::Move : Mode::Resize;
-    SetCapture(hwnd);
-}
-
-void WindowsLeanFrame::track(void* handle, int x, int y) {
-    HWND hwnd = hwndOf(handle);
-    constexpr UINT kFlags = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE;
-    if (mMode == Mode::Move) {
-        const lw::Point topLeft =
-                lw::dragTopLeft({mStartRect.left, mStartRect.top}, mGrab,
-                                mStartScale, {x, y}, windowScale(hwnd));
-        RECT window;
-        if (GetWindowRect(hwnd, &window) && window.left == topLeft.x &&
-            window.top == topLeft.y) {
-            return;
-        }
-        SetWindowPos(hwnd, nullptr, topLeft.x, topLeft.y, 0, 0,
-                     kFlags | SWP_NOSIZE);
-    } else if (mMode == Mode::Resize) {
-        const Geometry g = mGeometry();
-        if (g.guestAspect <= 0) {
-            return;
-        }
-        const lw::Rect r = lw::resizeRect(mStartRect, mHit, mGrab, {x, y},
-                                          g.titleHeight, g.guestAspect,
-                                          g.minGuestWidth, g.minGuestHeight);
-        SetWindowPos(hwnd, nullptr, r.left, r.top, r.width(), r.height(),
-                     kFlags);
-    }
-}
-
-void WindowsLeanFrame::stopTracking(void* handle, bool releaseCapture) {
-    const bool resized = mMode == Mode::Resize;
-    // Before ReleaseCapture(), which sends WM_CAPTURECHANGED.
-    mMode = Mode::None;
-    if (releaseCapture && GetCapture() == hwndOf(handle)) {
-        ReleaseCapture();
-    }
-    RECT window;
-    if (resized && mResizeDone && GetWindowRect(hwndOf(handle), &window)) {
-        mResizeDone(window.right - window.left, window.bottom - window.top);
     }
 }

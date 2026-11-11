@@ -15,8 +15,6 @@
 
 #include <gtest/gtest.h>
 
-#include <vector>
-
 namespace lw = android::lean_window;
 using lw::Hit;
 
@@ -115,36 +113,29 @@ TEST(LeanWindowFrame, IsResize) {
     }
 }
 
-TEST(LeanWindowFrame, DragSameScale) {
-    const lw::Point p = lw::dragTopLeft({100, 200}, {150, 210}, 1.0, {450, 610},
-                                        1.0);
-    EXPECT_EQ(p.x, 400);
-    EXPECT_EQ(p.y, 600);
-    // Off to the left and above the screen origin.
-    const lw::Point q = lw::dragTopLeft({100, 200}, {150, 210}, 1.5, {-20, -5},
-                                        1.5);
-    EXPECT_EQ(q.x, -70);
-    EXPECT_EQ(q.y, -15);
+TEST(LeanWindowFrame, HitTestMaximized) {
+    // Maximized there are no resize bands: the title bar reaches the top edge
+    // and the corners.
+    const lw::Layout l = {1920, 1032, 32, 1751, 0, 0, 0};
+    EXPECT_EQ(lw::hitTest(l, 0, 0), Hit::Caption);
+    EXPECT_EQ(lw::hitTest(l, 900, 0), Hit::Caption);
+    EXPECT_EQ(lw::hitTest(l, 1919, 0), Hit::Client);  // close button
+    EXPECT_EQ(lw::hitTest(l, 0, 500), Hit::Client);
+    EXPECT_EQ(lw::hitTest(l, 1919, 1031), Hit::Client);
+    EXPECT_EQ(lw::hitTest(l, 1920, 500), Hit::Nowhere);
 }
 
-TEST(LeanWindowFrame, DragOntoAnotherScale) {
-    // Grabbed 300 px right of the window's left edge at 100%; on a 150% screen
-    // the same point of the title bar is 450 px in, and stays under the cursor.
-    const lw::Point p = lw::dragTopLeft({0, 0}, {300, 16}, 1.0, {3000, 500},
-                                        1.5);
-    EXPECT_EQ(p.x, 3000 - 450);
-    EXPECT_EQ(p.y, 500 - 24);
-    // And back.
-    const lw::Point q = lw::dragTopLeft({2550, 476}, {3000, 500}, 1.5,
-                                        {1000, 300}, 1.0);
-    EXPECT_EQ(q.x, 1000 - 300);
-    EXPECT_EQ(q.y, 300 - 16);
-}
-
-TEST(LeanWindowFrame, DragBadScale) {
-    const lw::Point p = lw::dragTopLeft({0, 0}, {30, 10}, 0, {100, 100}, 2.0);
-    EXPECT_EQ(p.x, 70);
-    EXPECT_EQ(p.y, 90);
+TEST(LeanWindowFrame, SizingEdge) {
+    EXPECT_EQ(lw::sizingEdge(1), Hit::Left);         // WMSZ_LEFT
+    EXPECT_EQ(lw::sizingEdge(2), Hit::Right);
+    EXPECT_EQ(lw::sizingEdge(3), Hit::Top);
+    EXPECT_EQ(lw::sizingEdge(4), Hit::TopLeft);
+    EXPECT_EQ(lw::sizingEdge(5), Hit::TopRight);
+    EXPECT_EQ(lw::sizingEdge(6), Hit::Bottom);
+    EXPECT_EQ(lw::sizingEdge(7), Hit::BottomLeft);
+    EXPECT_EQ(lw::sizingEdge(8), Hit::BottomRight);  // WMSZ_BOTTOMRIGHT
+    EXPECT_EQ(lw::sizingEdge(0), Hit::Nowhere);
+    EXPECT_EQ(lw::sizingEdge(9), Hit::Nowhere);
 }
 
 namespace {
@@ -153,10 +144,25 @@ namespace {
 const lw::Rect kStart = {100, 100, 460, 772};
 constexpr double kAspect = 360.0 / 640.0;
 
-lw::Rect resize(Hit hit, int dx, int dy, int minW = 1, int minH = 1) {
-    const lw::Point grab = {300, 400};
-    return lw::resizeRect(kStart, hit, grab, {grab.x + dx, grab.y + dy}, 32,
-                          kAspect, minW, minH);
+// What the size loop proposes after |edge| was dragged by (dx, dy): only the
+// dragged edges have moved.
+lw::Rect sizing(Hit edge, int dx, int dy, int minW = 1, int minH = 1) {
+    lw::Rect proposed = kStart;
+    if (edge == Hit::Left || edge == Hit::TopLeft || edge == Hit::BottomLeft) {
+        proposed.left += dx;
+    }
+    if (edge == Hit::Right || edge == Hit::TopRight ||
+        edge == Hit::BottomRight) {
+        proposed.right += dx;
+    }
+    if (edge == Hit::Top || edge == Hit::TopLeft || edge == Hit::TopRight) {
+        proposed.top += dy;
+    }
+    if (edge == Hit::Bottom || edge == Hit::BottomLeft ||
+        edge == Hit::BottomRight) {
+        proposed.bottom += dy;
+    }
+    return lw::sizingRect(proposed, edge, 32, kAspect, minW, minH);
 }
 
 void expectGuest(const lw::Rect& r, int width, int height) {
@@ -166,139 +172,120 @@ void expectGuest(const lw::Rect& r, int width, int height) {
 
 }  // namespace
 
-TEST(LeanWindowFrame, ResizeRightKeepsAspectAndTopLeft) {
-    const lw::Rect r = resize(Hit::Right, 90, 0);
+TEST(LeanWindowFrame, SizingRightKeepsAspectAndTopLeft) {
+    const lw::Rect r = sizing(Hit::Right, 90, 0);
     expectGuest(r, 450, 800);
     EXPECT_EQ(r.left, 100);
     EXPECT_EQ(r.top, 100);
 }
 
-TEST(LeanWindowFrame, ResizeLeftKeepsRightEdge) {
-    const lw::Rect r = resize(Hit::Left, -90, 0);
+TEST(LeanWindowFrame, SizingLeftKeepsRightEdge) {
+    const lw::Rect r = sizing(Hit::Left, -90, 0);
     expectGuest(r, 450, 800);
     EXPECT_EQ(r.right, 460);
     EXPECT_EQ(r.top, 100);
 }
 
-TEST(LeanWindowFrame, ResizeBottomGrowsToTheRight) {
-    const lw::Rect r = resize(Hit::Bottom, 0, 160);
+TEST(LeanWindowFrame, SizingBottomGrowsToTheRight) {
+    const lw::Rect r = sizing(Hit::Bottom, 0, 160);
     expectGuest(r, 450, 800);
     EXPECT_EQ(r.left, 100);
     EXPECT_EQ(r.top, 100);
 }
 
-TEST(LeanWindowFrame, ResizeTopKeepsBottomEdge) {
-    const lw::Rect r = resize(Hit::Top, 0, -160);
+TEST(LeanWindowFrame, SizingTopKeepsBottomEdge) {
+    const lw::Rect r = sizing(Hit::Top, 0, -160);
     expectGuest(r, 450, 800);
     EXPECT_EQ(r.bottom, 772);
     EXPECT_EQ(r.left, 100);
 }
 
-TEST(LeanWindowFrame, ResizeCornerFollowsTheLongerPull) {
+TEST(LeanWindowFrame, SizingCornerFollowsTheLongerPull) {
     // Pulled further down than right: the height leads.
-    expectGuest(resize(Hit::BottomRight, 10, 160), 450, 800);
+    expectGuest(sizing(Hit::BottomRight, 10, 160), 450, 800);
     // Pulled further right: the width leads.
-    expectGuest(resize(Hit::BottomRight, 90, 10), 450, 800);
-    const lw::Rect r = resize(Hit::TopLeft, -90, -10);
+    expectGuest(sizing(Hit::BottomRight, 90, 10), 450, 800);
+    const lw::Rect r = sizing(Hit::TopLeft, -90, -10);
     expectGuest(r, 450, 800);
     EXPECT_EQ(r.right, 460);
     EXPECT_EQ(r.bottom, 772);
-    const lw::Rect s = resize(Hit::TopRight, 90, 0);
+    const lw::Rect s = sizing(Hit::TopRight, 90, 0);
     EXPECT_EQ(s.left, 100);
     EXPECT_EQ(s.bottom, 772);
-    const lw::Rect t = resize(Hit::BottomLeft, -90, 0);
+    const lw::Rect t = sizing(Hit::BottomLeft, -90, 0);
     EXPECT_EQ(t.right, 460);
     EXPECT_EQ(t.top, 100);
 }
 
-TEST(LeanWindowFrame, ResizeShrinks) {
-    expectGuest(resize(Hit::Right, -180, 0), 180, 320);
-    expectGuest(resize(Hit::Bottom, 0, -320), 180, 320);
+TEST(LeanWindowFrame, SizingShrinks) {
+    expectGuest(sizing(Hit::Right, -180, 0), 180, 320);
+    expectGuest(sizing(Hit::Bottom, 0, -320), 180, 320);
 }
 
-TEST(LeanWindowFrame, ResizeStopsAtTheMinimum) {
+TEST(LeanWindowFrame, SizingFromAnotherShape) {
+    // A snapped window, half a 1920x1032 work area, with the guest screen
+    // letterboxed in it: dragging an edge brings it back to the guest's shape.
+    const lw::Rect snapped = {0, 0, 960, 1032};
+    lw::Rect proposed = snapped;
+    proposed.right -= 60;  // the right edge, 60 px to the left
+    const lw::Rect r =
+            lw::sizingRect(proposed, Hit::Right, 32, 1280.0 / 720.0, 1, 1);
+    EXPECT_EQ(r.left, 0);
+    EXPECT_EQ(r.top, 0);
+    EXPECT_EQ(r.width(), 900);
+    EXPECT_EQ(r.height() - 32, 506);
+}
+
+TEST(LeanWindowFrame, SizingStopsAtTheMinimum) {
     // At least 200 wide and 168 high: 200 wide wins for a 9:16 screen.
-    const lw::Rect r = resize(Hit::Right, -1000, 0, 200, 168);
+    const lw::Rect r = sizing(Hit::Right, -1000, 0, 200, 168);
     expectGuest(r, 200, 356);
-    const lw::Rect s = resize(Hit::Left, 1000, 0, 200, 168);
+    const lw::Rect s = sizing(Hit::Left, 1000, 0, 200, 168);
     expectGuest(s, 200, 356);
     EXPECT_EQ(s.right, 460);
     // A landscape screen is held by its height.
-    const lw::Rect wide = lw::resizeRect({0, 0, 640, 392}, Hit::Bottom,
-                                         {0, 0}, {0, -1000}, 32, 640.0 / 360.0,
-                                         200, 168);
+    const lw::Rect wide = lw::sizingRect({0, 0, 640, 40}, Hit::Bottom, 32,
+                                         640.0 / 360.0, 200, 168);
     EXPECT_EQ(wide.height() - 32, 168);
     EXPECT_EQ(wide.width(), 299);
 }
 
-TEST(LeanWindowFrame, ResizeIgnoresNonResizeHits) {
-    for (Hit hit : {Hit::Caption, Hit::Client, Hit::Nowhere}) {
-        const lw::Rect r = resize(hit, 50, 50);
+TEST(LeanWindowFrame, SizingIgnoresNonResizeEdges) {
+    for (Hit edge : {Hit::Caption, Hit::Client, Hit::Nowhere}) {
+        const lw::Rect r = sizing(edge, 50, 50);
         EXPECT_EQ(r.left, kStart.left);
         EXPECT_EQ(r.top, kStart.top);
         EXPECT_EQ(r.right, kStart.right);
         EXPECT_EQ(r.bottom, kStart.bottom);
     }
-    const lw::Rect r = lw::resizeRect(kStart, Hit::Right, {0, 0}, {50, 0}, 32,
-                                      0.0, 1, 1);
-    EXPECT_EQ(r.right, kStart.right);
+    const lw::Rect proposed = {100, 100, 510, 772};
+    const lw::Rect r = lw::sizingRect(proposed, Hit::Right, 32, 0.0, 1, 1);
+    EXPECT_EQ(r.right, proposed.right);
+    EXPECT_EQ(r.bottom, proposed.bottom);
 }
 
-TEST(LeanWindowFrame, SystemMenuKeepsMinimizeAndClose) {
-    EXPECT_TRUE(lw::keepsSystemMenuItem(lw::kScMinimize));
-    EXPECT_TRUE(lw::keepsSystemMenuItem(lw::kScClose));
-    for (unsigned id : std::vector<unsigned>{lw::kScRestore, lw::kScMove, lw::kScSize,
-                        lw::kScMaximize, 0u, 0xF100u /*SC_KEYMENU*/}) {
-        EXPECT_FALSE(lw::keepsSystemMenuItem(id)) << std::hex << id;
-    }
-}
-
-TEST(LeanWindowFrame, SystemMenuItemsToDelete) {
-    // Windows' own menu: Restore, Move, Size, Minimize, Maximize, -, Close.
-    const std::vector<unsigned> standard = {
-            lw::kScRestore, lw::kScMove,    lw::kScSize, lw::kScMinimize,
-            lw::kScMaximize, 0,             lw::kScClose};
-    EXPECT_EQ(lw::systemMenuItemsToDelete(standard),
-              (std::vector<int>{4, 2, 1, 0}));
-    // What is left: Minimize, -, Close. Nothing more to delete.
-    EXPECT_EQ(lw::systemMenuItemsToDelete(
-                      {lw::kScMinimize, 0, lw::kScClose}),
-              std::vector<int>{});
-}
-
-TEST(LeanWindowFrame, SystemMenuSeparators) {
-    // Leading, trailing, doubled separators go.
-    EXPECT_EQ(lw::systemMenuItemsToDelete({0, lw::kScMinimize, 0, 0,
-                                           lw::kScClose, 0}),
-              (std::vector<int>{5, 3, 0}));
-    // A separator between a kept and a dropped item goes with it.
-    EXPECT_EQ(lw::systemMenuItemsToDelete(
-                      {lw::kScMinimize, 0, lw::kScMaximize, 0, lw::kScClose}),
-              (std::vector<int>{3, 2}));
-    EXPECT_EQ(lw::systemMenuItemsToDelete({lw::kScClose, 0, lw::kScMaximize}),
-              (std::vector<int>{2, 1}));
-    EXPECT_EQ(lw::systemMenuItemsToDelete({}), std::vector<int>{});
-}
-
-TEST(LeanWindowFrame, RefusedSysCommands) {
-    EXPECT_TRUE(lw::refusesSysCommand(lw::kScMaximize));
-    EXPECT_TRUE(lw::refusesSysCommand(lw::kScMaximize | 2));  // e.g. 0xF032
-    EXPECT_TRUE(lw::refusesSysCommand(lw::kScMove));
-    EXPECT_TRUE(lw::refusesSysCommand(0xF012));  // SC_DRAGMOVE
-    EXPECT_TRUE(lw::refusesSysCommand(lw::kScSize));
-    EXPECT_TRUE(lw::refusesSysCommand(lw::kScSize | 8));  // bottom right
-    for (unsigned command : std::vector<unsigned>{lw::kScMinimize, lw::kScClose, lw::kScRestore,
-                             0xF100u /*SC_KEYMENU*/, 0xF090u /*SC_MOUSEMENU*/,
-                             0xF130u /*SC_TASKLIST*/}) {
-        EXPECT_FALSE(lw::refusesSysCommand(command)) << std::hex << command;
-    }
-}
-
-TEST(LeanWindowFrame, OnlyMovesWithTheLeftButtonDrag) {
-    EXPECT_TRUE(lw::movesDrag(0x0001));           // MK_LBUTTON
-    EXPECT_TRUE(lw::movesDrag(0x0001 | 0x0004));  // with MK_SHIFT
-    EXPECT_TRUE(lw::movesDrag(0x0001 | 0x0002));  // with MK_RBUTTON
-    EXPECT_FALSE(lw::movesDrag(0));
-    EXPECT_FALSE(lw::movesDrag(0x0002));  // MK_RBUTTON alone
-    EXPECT_FALSE(lw::movesDrag(0x0004 | 0x0008 | 0x0010));  // shift, control, middle
+TEST(LeanWindowFrame, VisiblePartOfAMaximizedWindow) {
+    // A 1920x1080 screen with a 48 px task bar at the bottom; the maximized
+    // window hangs over the work area by its 8 px frame.
+    const lw::Rect work = {0, 0, 1920, 1032};
+    const lw::Rect r = lw::visiblePart({-8, -8, 1928, 1040}, work);
+    EXPECT_EQ(r.left, 0);
+    EXPECT_EQ(r.top, 0);
+    EXPECT_EQ(r.right, 1920);
+    EXPECT_EQ(r.bottom, 1032);
+    // On a screen to the left, at 150%: a 12 px frame.
+    const lw::Rect s = lw::visiblePart({-2572, -12, 12, 1452},
+                                       {-2560, 0, 0, 1440});
+    EXPECT_EQ(s.left, -2560);
+    EXPECT_EQ(s.top, 0);
+    EXPECT_EQ(s.right, 0);
+    EXPECT_EQ(s.bottom, 1440);
+    // A window inside the work area is all there.
+    const lw::Rect t = lw::visiblePart({100, 100, 500, 400}, work);
+    EXPECT_EQ(t.left, 100);
+    EXPECT_EQ(t.bottom, 400);
+    // A window that is not on that screen at all stays as it is.
+    const lw::Rect u = lw::visiblePart({3000, 100, 3400, 400}, work);
+    EXPECT_EQ(u.left, 3000);
+    EXPECT_EQ(u.right, 3400);
 }

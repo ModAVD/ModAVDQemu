@@ -131,7 +131,9 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
     const bool lean = ToolWindow::inWindowNav();
     if (lean) {
         setWindowFlags(kLeanWindowFlags);
-        setStyleSheet(QStringLiteral("EmulatorContainer { background: #20212D; }"));
+        // Black around the guest screen where the window has another shape
+        // than it (ModAVD#161).
+        setStyleSheet(QStringLiteral("EmulatorContainer { background: black; }"));
 #if QT_CONFIG(accessibility)
         static const bool accessibleInstalled = [] {
             QAccessible::installFactory(leanContainerAccessible);
@@ -143,19 +145,17 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
         // their tool tips while the window is not the active one.
         setAttribute(Qt::WA_AlwaysShowToolTips);
 #ifdef _WIN32
+        // Maximized or snapped, the window has another shape than the guest
+        // screen, which then sits in the middle of it (ModAVD#161).
+        setAlignment(Qt::AlignCenter);
         mLeanFrame = std::make_unique<WindowsLeanFrame>(
                 [this] { return leanFrameGeometry(this, mEmulatorWindow); },
-                [this](int width, int height) {
-                    // The window was resized by hand: fit the guest screen to
-                    // it, as after the system's resizing. From the native
-                    // size: Qt may not have passed the last geometry change
-                    // on to the widget yet, and size() would be older.
-                    stopResizeTimer();
-                    const double dpr = devicePixelRatioF();
-                    const QSize window(static_cast<int>(std::lround(width / dpr)),
-                                       static_cast<int>(std::lround(height / dpr)));
-                    mEmulatorWindow->doResize(window -
-                                              ToolWindow::windowChrome());
+                [this] {
+                    // The system's move or size loop is over, and the window
+                    // may have been resized, snapped or maximized: fit the
+                    // guest screen into it, once Qt has passed the last
+                    // geometry change on to the widget.
+                    mResizeTimer.start(0);
                 });
 #endif
     } else {
@@ -330,6 +330,7 @@ bool EmulatorContainer::event(QEvent* e) {
 void EmulatorContainer::changeEvent(QEvent* event) {
     switch (event->type()) {
         case QEvent::WindowStateChange:
+            updateLeanMargins();
             // Strictly preventing the maximizing (called "zooming" on OS X) of
             // a window is hard - it changes by host, and even by window manager
             // on Linux. Therefore, we counteract it by seeing if the window
@@ -342,7 +343,11 @@ void EmulatorContainer::changeEvent(QEvent* event) {
             // OS-level window has changed to a maximized state. We do not want
             // to ignore this state change, we just want to counteract the
             // effects it had.
-            if (windowState() & Qt::WindowMaximized) {
+            //
+            // The lean window on Windows is the exception: it is maximized
+            // like any other window (ModAVD#161), and resizeEvent() has the
+            // guest screen fitted into it.
+            if ((windowState() & Qt::WindowMaximized) && !letterboxes()) {
                 // BUG: 142088252 On macOS, if the emulator window
                 // - coincides with the monitor dimensions
                 // - the host's device pixel ratio is 1,
@@ -505,6 +510,8 @@ void EmulatorContainer::moveEvent(QMoveEvent* event) {
 }
 
 void EmulatorContainer::resizeEvent(QResizeEvent* event) {
+    // Maximizing and restoring change what hangs over the screen.
+    updateLeanMargins();
     QScrollArea::resizeEvent(event);
     mEmulatorWindow->simulateZoomedWindowResized(this->viewportSize());
     adjustModalOverlayGeometry();
@@ -652,6 +659,70 @@ void EmulatorContainer::applyLeanFrame() {
 #endif
 }
 
+void EmulatorContainer::setLeanTitleBarHeight(int height) {
+    mLeanTitleBarHeight = height;
+    updateLeanMargins();
+}
+
+QRect EmulatorContainer::leanTitleBarGeometry() const {
+    return QRect(mLeanInset.left(), mLeanInset.top(),
+                 width() - mLeanInset.left() - mLeanInset.right(),
+                 mLeanTitleBarHeight);
+}
+
+void EmulatorContainer::updateLeanMargins() {
+    QMargins inset;
+#ifdef _WIN32
+    if (mLeanFrame && internalWinId()) {
+        // A maximized window hangs over the screen by its frame, which here
+        // is client area: nothing goes there.
+        const WindowsLeanFrame::Overhang over =
+                WindowsLeanFrame::maximizedOverhang(internalWinId());
+        const double dpr = devicePixelRatioF();
+        const auto logical = [dpr](int device) {
+            return static_cast<int>(std::ceil(device / dpr));
+        };
+        inset = QMargins(logical(over.left), logical(over.top),
+                         logical(over.right), logical(over.bottom));
+    }
+#endif
+    const bool changed = inset != mLeanInset;
+    mLeanInset = inset;
+    setViewportMargins(inset.left(), inset.top() + mLeanTitleBarHeight,
+                       inset.right(), inset.bottom());
+    if (changed) {
+        // The title bar moves with it, and the guest screen has another room
+        // to fit into.
+        if (mEmulatorWindow->toolWindow()) {
+            mEmulatorWindow->toolWindow()->dockMainWindow();
+        }
+        startResizeTimer();
+    }
+}
+
+QSize EmulatorContainer::guestAreaSize() const {
+    return size() - ToolWindow::windowChrome() -
+           QSize(mLeanInset.left() + mLeanInset.right(),
+                 mLeanInset.top() + mLeanInset.bottom());
+}
+
+bool EmulatorContainer::letterboxes() const {
+#ifdef _WIN32
+    return mLeanFrame != nullptr;
+#else
+    return false;
+#endif
+}
+
+bool EmulatorContainer::heldBySystem() const {
+#ifdef _WIN32
+    return mLeanFrame && internalWinId() &&
+           WindowsLeanFrame::heldBySystem(internalWinId());
+#else
+    return false;
+#endif
+}
+
 bool EmulatorContainer::nativeEvent(const QByteArray& eventType,
                                     void* message,
                                     qintptr* result) {
@@ -665,7 +736,7 @@ bool EmulatorContainer::nativeEvent(const QByteArray& eventType,
 }
 
 QSize EmulatorContainer::viewportSize() const {
-    QSize output = this->size() - ToolWindow::windowChrome();
+    QSize output = guestAreaSize();
 
     QScrollBar* vertical = this->verticalScrollBar();
     output.setWidth(output.width() -
@@ -797,6 +868,15 @@ void EmulatorContainer::startResizeTimer() {
 #ifdef __linux__
     mResizeTimer.start(1000);
 #else
+#ifdef _WIN32
+    // The lean window is resized by the system: in its size loop, whose end
+    // fits the guest screen, or at once when it is maximized, snapped or
+    // restored. For the latter there is nothing to wait for.
+    if (mLeanFrame && !mLeanFrame->inSizeMove()) {
+        mResizeTimer.start(30);
+        return;
+    }
+#endif
     mResizeTimer.start(500);
 #endif
 }
@@ -838,7 +918,7 @@ void EmulatorContainer::adjustMessagesOverlayGeometry() {
     // Below the lean title bar, at the top of the guest screen.
     mMessages->move(mapToGlobal(QPoint()) +=
                     {(width() - mMessages->width()) / 2,
-                     ToolWindow::windowChrome().height()});
+                     mLeanInset.top() + ToolWindow::windowChrome().height()});
 }
 
 void EmulatorContainer::adjustGlassesStatusOverlayGeometry() {

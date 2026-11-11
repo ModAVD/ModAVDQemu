@@ -15,6 +15,8 @@
 #include <qobjectdefs.h>                   // for Q_OBJECT, signals, slots
 #include <QEvent>                          // for QEvent
 #include <QList>                           // for QList
+#include <QMargins>                        // for QMargins
+#include <QRect>                           // for QRect
 #include <QScrollArea>                     // for QScrollArea
 #include <QSize>                           // for QSize
 #include <QString>                         // for QString
@@ -78,12 +80,24 @@ public:
     QSize viewportSize() const;
 
     // The lean title bar takes the top of the window, above the guest screen.
-    void setLeanTitleBarHeight(int height) {
-        setViewportMargins(0, height, 0, 0);
-    }
+    void setLeanTitleBarHeight(int height);
+    // Where the lean title bar goes: along the top of the window, or of the
+    // part of it that is on the screen when it is maximized.
+    QRect leanTitleBarGeometry() const;
     // Gives the native window the lean window's frame again; Qt resets the
     // window style whenever it changes the window flags.
     void applyLeanFrame();
+
+    // The room the window has for the guest screen: all of it but the lean
+    // title bar and, maximized, what hangs over the screen.
+    QSize guestAreaSize() const;
+    // Whether the window can have another shape than the guest screen, which
+    // is then centered in it between black bars (ModAVD#161): the lean window
+    // on Windows, which the system maximizes and snaps.
+    bool letterboxes() const;
+    // Whether the system holds the window at a size of its own choosing:
+    // maximized or snapped.
+    bool heldBySystem() const;
 
 protected:
     bool nativeEvent(const QByteArray& eventType,
@@ -118,6 +132,7 @@ private slots:
 
 private:
     void startResizeTimer();
+    void updateLeanMargins();
     void adjustModalOverlayGeometry();
     void adjustVirtualSceneDialogGeometry();
     void adjustMessagesOverlayGeometry();
@@ -136,6 +151,10 @@ private:
     QList<QEvent::Type> mEventBuffer;
     QTimer mResizeTimer;
     bool mRotating = false;
+    int mLeanTitleBarHeight = 0;
+    // What a maximized lean window leaves empty along its edges, the part of
+    // it that hangs over the screen. Logical pixels.
+    QMargins mLeanInset;
 #ifdef _WIN32
     std::unique_ptr<WindowsLeanFrame> mLeanFrame;
     bool mLeanFrameThemeConnected = false;

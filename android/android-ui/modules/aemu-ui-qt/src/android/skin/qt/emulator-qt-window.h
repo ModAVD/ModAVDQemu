@@ -556,6 +556,10 @@ private:
     QRect hostImeCursorRect() const;
 
     void maskWindowFrame();
+    // Sizes the window for a guest screen that went from |guestBefore| to
+    // |guest|, or leaves the window as it is and has the guest screen fitted
+    // into it.
+    void resizeContainerForGuest(const QSize& guest, const QSize& guestBefore);
     bool hasFrame() const;
     bool hasSkin() const;
 
@@ -721,6 +725,9 @@ private:
     bool mShouldShowGpuWarning = false;
     bool mFirstShowWindowCall = true;
     bool mFirstShowEvent = true;
+    // The room the guest screen was last asked to fit into again; see
+    // resizeContainerForGuest().
+    QSize mRefitGuestArea;
     // Some events may arrive after closing the main window (e.g. async screen
     // redraw requests); we want to ignore those when exiting.
     bool mClosed = false;

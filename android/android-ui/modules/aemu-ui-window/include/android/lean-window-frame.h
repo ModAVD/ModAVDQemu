@@ -13,13 +13,12 @@
 // limitations under the License.
 #pragma once
 
-#include <vector>
-
 // The window frame of the lean window (ModAVD#58): the window has no system
-// title bar and no resizable frame, the emulator draws the title bar and moves
-// and resizes the window itself. This is the arithmetic of it, without any
-// windowing system, so that it can be tested on its own. All lengths are in
-// device pixels, all points in screen coordinates unless said otherwise.
+// title bar, the emulator draws the title bar and says which part of the
+// window is what; the system moves, resizes, maximizes and snaps it
+// (ModAVD#161). This is the arithmetic of it, without any windowing system, so
+// that it can be tested on its own. All lengths are in device pixels, all
+// points in screen coordinates unless said otherwise.
 namespace android {
 namespace lean_window {
 
@@ -78,61 +77,27 @@ Hit hitTest(const Layout& layout, int x, int y);
 // Whether |hit| resizes the window.
 bool isResize(Hit hit);
 
-// Where the window's top-left corner goes while the title bar is dragged: the
-// point that was grabbed at |grab|, with the window at |startTopLeft| and the
-// screen scale |startScale|, stays under the cursor at |cursor| when the
-// window is at scale |scale| (it changes when the window moves onto a screen
-// with another scale and Windows resizes it).
-Point dragTopLeft(Point startTopLeft,
-                  Point grab,
-                  double startScale,
-                  Point cursor,
-                  double scale);
+// The edge or corner the system's size loop drags, from the wParam of
+// WM_SIZING (WMSZ_LEFT ... WMSZ_BOTTOMRIGHT); Hit::Nowhere for anything else.
+Hit sizingEdge(unsigned wparam);
 
-// The window while the resize band |hit| is dragged from |grab| to |cursor|,
-// starting from |start|. The guest screen, the window below the title bar of
+// The window the system's size loop gets instead of |proposed| while |edge| is
+// dragged (WM_SIZING). The guest screen, the window below the title bar of
 // |titleHeight|, keeps the ratio |aspect| (width / height) and is at least
 // |minGuestWidth| x |minGuestHeight|. The edges opposite the dragged ones stay
 // where they are; a side edge grows the window downwards, the top and bottom
-// edges grow it to the right.
-Rect resizeRect(const Rect& start,
-                Hit hit,
-                Point grab,
-                Point cursor,
+// edges grow it to the right, a corner follows the edge that asks for more.
+Rect sizingRect(const Rect& proposed,
+                Hit edge,
                 int titleHeight,
                 double aspect,
                 int minGuestWidth,
                 int minGuestHeight);
 
-// Win32 system commands (WM_SYSCOMMAND, low four bits masked off).
-enum SysCommand : unsigned {
-    kScSize = 0xF000,
-    kScMove = 0xF010,
-    kScMinimize = 0xF020,
-    kScMaximize = 0xF030,
-    kScClose = 0xF060,
-    kScRestore = 0xF120,
-};
-
-// The system menu (Alt+Space, right click on the title bar) keeps only
-// minimize and close.
-bool keepsSystemMenuItem(unsigned id);
-
-// The positions to delete, last first, from a system menu whose items have
-// the ids |ids| (0 for a separator): every item but the kept ones, and every
-// separator that would not stand between two kept items.
-std::vector<int> systemMenuItemsToDelete(const std::vector<unsigned>& ids);
-
-// Whether the window refuses the system command |wparam| (the WM_SYSCOMMAND
-// wParam): maximize, and the keyboard move and size, which would start the
-// system's move and size loops and with them Snap.
-bool refusesSysCommand(unsigned wparam);
-
-// Whether a mouse move with the key state |keys| (the WM_MOUSEMOVE wParam)
-// belongs to a drag of the title bar or an edge: only while the left button is
-// down. Windows also sends moves at the real cursor when the window changes
-// under it; with the button up they are not part of the drag.
-bool movesDrag(unsigned keys);
+// The part of the maximized window |window| that is on the screen: Windows
+// lets a maximized window with a resizable frame hang over the work area
+// |work| of its screen by the width of that frame on every side.
+Rect visiblePart(const Rect& window, const Rect& work);
 
 }  // namespace lean_window
 }  // namespace android

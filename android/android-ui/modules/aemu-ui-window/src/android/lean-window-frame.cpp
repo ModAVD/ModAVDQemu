@@ -65,52 +65,40 @@ bool isResize(Hit hit) {
            static_cast<int>(hit) <= static_cast<int>(Hit::BottomRight);
 }
 
-Point dragTopLeft(Point startTopLeft,
-                  Point grab,
-                  double startScale,
-                  Point cursor,
-                  double scale) {
-    const double ratio = startScale > 0 && scale > 0 ? scale / startScale : 1.0;
-    const int offsetX = static_cast<int>(
-            std::lround((grab.x - startTopLeft.x) * ratio));
-    const int offsetY = static_cast<int>(
-            std::lround((grab.y - startTopLeft.y) * ratio));
-    return {cursor.x - offsetX, cursor.y - offsetY};
+Hit sizingEdge(unsigned wparam) {
+    // WMSZ_LEFT (1) ... WMSZ_BOTTOMRIGHT (8) are in the order of HTLEFT (10)
+    // ... HTBOTTOMRIGHT (17).
+    return wparam >= 1 && wparam <= 8 ? static_cast<Hit>(wparam + 9)
+                                      : Hit::Nowhere;
 }
 
-Rect resizeRect(const Rect& start,
-                Hit hit,
-                Point grab,
-                Point cursor,
+Rect sizingRect(const Rect& proposed,
+                Hit edge,
                 int titleHeight,
                 double aspect,
                 int minGuestWidth,
                 int minGuestHeight) {
-    if (!isResize(hit) || aspect <= 0) {
-        return start;
+    if (!isResize(edge) || aspect <= 0) {
+        return proposed;
     }
-    const bool left = hit == Hit::Left || hit == Hit::TopLeft ||
-                      hit == Hit::BottomLeft;
-    const bool right = hit == Hit::Right || hit == Hit::TopRight ||
-                       hit == Hit::BottomRight;
+    const bool left = edge == Hit::Left || edge == Hit::TopLeft ||
+                      edge == Hit::BottomLeft;
+    const bool right = edge == Hit::Right || edge == Hit::TopRight ||
+                       edge == Hit::BottomRight;
     const bool top =
-            hit == Hit::Top || hit == Hit::TopLeft || hit == Hit::TopRight;
-    const bool bottom = hit == Hit::Bottom || hit == Hit::BottomLeft ||
-                        hit == Hit::BottomRight;
-    const int dx = cursor.x - grab.x;
-    const int dy = cursor.y - grab.y;
-    const double startWidth = start.width();
-    const double startHeight = std::max(1, start.height() - titleHeight);
+            edge == Hit::Top || edge == Hit::TopLeft || edge == Hit::TopRight;
+    const bool bottom = edge == Hit::Bottom || edge == Hit::BottomLeft ||
+                        edge == Hit::BottomRight;
 
     // The guest height each dragged edge asks for; the larger one wins, so a
     // corner follows the cursor along whichever edge it moved further.
     double height = 0;
     if (left || right) {
-        const double width = startWidth + (right ? dx : -dx);
-        height = width / aspect;
+        height = proposed.width() / aspect;
     }
     if (top || bottom) {
-        height = std::max(height, startHeight + (bottom ? dy : -dy));
+        height = std::max(height,
+                          static_cast<double>(proposed.height() - titleHeight));
     }
     height = std::max({height, static_cast<double>(minGuestHeight),
                        minGuestWidth / aspect, 1.0});
@@ -118,57 +106,26 @@ Rect resizeRect(const Rect& start,
     const int guestWidth = std::max(
             1, static_cast<int>(std::lround(guestHeight * aspect)));
 
-    Rect r = start;
+    Rect r = proposed;
     if (left) {
-        r.left = start.right - guestWidth;
+        r.left = proposed.right - guestWidth;
     } else {
-        r.right = start.left + guestWidth;
+        r.right = proposed.left + guestWidth;
     }
     if (top) {
-        r.top = start.bottom - guestHeight - titleHeight;
+        r.top = proposed.bottom - guestHeight - titleHeight;
     } else {
-        r.bottom = start.top + titleHeight + guestHeight;
+        r.bottom = proposed.top + titleHeight + guestHeight;
     }
     return r;
 }
 
-bool keepsSystemMenuItem(unsigned id) {
-    return id == kScMinimize || id == kScClose;
-}
-
-std::vector<int> systemMenuItemsToDelete(const std::vector<unsigned>& ids) {
-    std::vector<int> remove;
-    bool keptBefore = false;  // a kept item before the current position
-    int pendingSeparator = -1;
-    for (int i = 0; i < static_cast<int>(ids.size()); ++i) {
-        if (ids[i] == 0) {
-            if (keptBefore && pendingSeparator < 0) {
-                pendingSeparator = i;  // kept if another kept item follows
-            } else {
-                remove.push_back(i);
-            }
-        } else if (keepsSystemMenuItem(ids[i])) {
-            keptBefore = true;
-            pendingSeparator = -1;
-        } else {
-            remove.push_back(i);
-        }
-    }
-    if (pendingSeparator >= 0) {
-        remove.push_back(pendingSeparator);
-    }
-    std::sort(remove.rbegin(), remove.rend());
-    return remove;
-}
-
-bool refusesSysCommand(unsigned wparam) {
-    const unsigned command = wparam & 0xFFF0;
-    return command == kScMaximize || command == kScMove || command == kScSize;
-}
-
-bool movesDrag(unsigned keys) {
-    constexpr unsigned kLeftButton = 0x0001;  // MK_LBUTTON
-    return (keys & kLeftButton) != 0;
+Rect visiblePart(const Rect& window, const Rect& work) {
+    const Rect r = {std::max(window.left, work.left),
+                    std::max(window.top, work.top),
+                    std::min(window.right, work.right),
+                    std::min(window.bottom, work.bottom)};
+    return r.width() > 0 && r.height() > 0 ? r : window;
 }
 
 }  // namespace lean_window

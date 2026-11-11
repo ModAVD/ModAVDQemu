@@ -2791,6 +2791,7 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
     }
 
     showNormal();
+    const QSize guestBefore = size();
     setFixedSize(rect.size());
 
     const QSize chrome = ToolWindow::windowChrome();
@@ -2819,12 +2820,14 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
         mContainer.stopResizeTimer();
         recenterFocusPoint();
     } else if (!mNextIsZoom) {
-        mContainer.resize(rect.size() + chrome);
+        resizeContainerForGuest(rect.size(), guestBefore);
     }
     mNextIsZoom = false;
 
     maskWindowFrame();
     show();
+    // The guest screen may have moved inside the window.
+    mOverlay.move(mContainer.mapToGlobal(contentOffset()));
 
     // Zooming forces the scroll bar to be visible for sizing purposes. They
     // should never be shown when not in zoom mode, and should only show when
@@ -2853,6 +2856,52 @@ void EmulatorQtWindow::slot_showWindow(SkinSurface* surface,
     }
 
     hostImeUpdateCursor();
+}
+
+void EmulatorQtWindow::resizeContainerForGuest(const QSize& guest,
+                                               const QSize& guestBefore) {
+    const QSize chrome = ToolWindow::windowChrome();
+    const QSize area = mContainer.guestAreaSize();
+    const auto within = [](const QSize& a, const QSize& b, int pixels) {
+        return std::abs(a.width() - b.width()) <= pixels &&
+               std::abs(a.height() - b.height()) <= pixels;
+    };
+    // The window takes the size of the guest screen. The lean window on
+    // Windows is the exception (ModAVD#161): the system maximizes and snaps
+    // it, and a window manager may give it any size. Then the window leads,
+    // and the guest screen is fitted into it: it was not around the guest
+    // screen before this, or the system holds its size.
+    const bool windowLeads =
+            mContainer.letterboxes() && !mFirstShowWindowCall &&
+            (mContainer.heldBySystem() || !within(area, guestBefore, 1));
+    if (!windowLeads) {
+        mContainer.resize(guest + chrome);
+        return;
+    }
+    // The largest guest screen in the window touches two opposite edges.
+    const QSize bars = area - guest;
+    const bool fitted = bars.width() >= -1 && bars.height() >= -1 &&
+                        (bars.width() <= 1 || bars.height() <= 1);
+    if (!fitted) {
+        // The guest screen changed on its own, rotated for example: fit it
+        // into the window. Once for a window of this size; a guest screen
+        // that cannot be scaled to fit stays as it is.
+        if (mRefitGuestArea != area) {
+            mRefitGuestArea = area;
+            QTimer::singleShot(0, this, [this] {
+                if (!mInZoomMode) {
+                    doResize(guestAreaSize());
+                }
+            });
+        }
+        return;
+    }
+    mRefitGuestArea = QSize();
+    if (!mContainer.heldBySystem() && within(area, guest, 4)) {
+        // All but the guest screen's shape, after an edge was dragged: the
+        // window closes around it.
+        mContainer.resize(guest + chrome);
+    }
 }
 
 void EmulatorQtWindow::onScreenChanged(QScreen* newScreen) {
@@ -4214,13 +4263,16 @@ EmulatorContainer* EmulatorQtWindow::containerWindow() {
 }
 
 QSize EmulatorQtWindow::guestAreaSize() const {
-    return mContainer.size() - ToolWindow::windowChrome();
+    return mContainer.guestAreaSize();
 }
 
 QPoint EmulatorQtWindow::contentOffset() const {
     // The scroll area's viewport: below the lean title bar, at (0, 0) without
-    // one. Scrolling inside it is the skin's to add.
-    return mContainer.viewport()->pos();
+    // one. And in it, where the scroll area centers the guest screen when the
+    // window has another shape (ModAVD#161). Scrolling inside the viewport,
+    // which puts this widget at negative coordinates, is the skin's to add.
+    return mContainer.viewport()->pos() +
+           QPoint(std::max(0, x()), std::max(0, y()));
 }
 
 void EmulatorQtWindow::showZoomIfNotUserHidden() {
