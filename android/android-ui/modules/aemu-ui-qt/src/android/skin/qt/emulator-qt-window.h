@@ -72,6 +72,9 @@ class CarClusterWindow;
 class CarClusterConnector;
 class MultiDisplayWidget;
 class SharedMemoryRenderer;
+namespace android {
+class SafeShutdown;
+}  // namespace android
 #include "android/skin/qt/SharedStreamEmulator.h"
 
 
@@ -244,7 +247,6 @@ public:
     android::emulation::AdbInterface* getAdbInterface() const;
     void startSafeShutdown();
     void hideForSafeShutdown();
-    void forceCloseNow();
     bool safeShutdownInProgress() const;
     // Windows ending the session: WM_QUERYENDSESSION (returns whether to
     // refuse it) and WM_ENDSESSION (|ending| is its wParam).
@@ -574,10 +576,6 @@ private:
                      android::emulation::FilePusher::Result result);
 
     void runAdbShellPowerDownAndQuit();
-    void requestGuestPowerOff();
-    void requestInitPowerOff();
-    void startSafeShutdownSync();
-    void startSessionEndSync();
     void setVisibleExtent(QBitmap bitMap);
     Qt::CursorShape getCursorShape(bool mouseGrabbed);
 
@@ -768,13 +766,11 @@ private:
     std::unique_ptr<SwipeGesture> mSwipeGesture;
     bool mStartedAdbStopProcess;
 
-    enum class SafeShutdownState {
-        Idle,
-        StoppingGuest,
-        Syncing,
-        Forced,
-    };
-    SafeShutdownState mSafeShutdownState = SafeShutdownState::Idle;
+    // The safe shutdown (android/safe-shutdown.h) and what it needs from the
+    // window; the timer is for Android powering off.
+    class SafeShutdownHost;
+    std::unique_ptr<SafeShutdownHost> mSafeShutdownHost;
+    std::unique_ptr<android::SafeShutdown> mSafeShutdown;
     QTimer mSafeShutdownTimeout;
     bool mHiddenForSafeShutdown = false;
 #ifdef _WIN32

@@ -68,6 +68,7 @@ android_qt_lib(
        aemu-ui-headless # Yes! The QT ui depends on the headless one..
        aemu-ui-lean-window
        aemu-ui-qt-base
+       aemu-ui-safe-shutdown
        aemu::recording
        android-emu
        android-emu-base

@@ -21,6 +21,8 @@
 #include "host-common/hw-config.h"
 #include "android/avd/info.h"
 #include "android/console.h"                           // for android_hw
+#include "android/emulation/control/adb/AdbInterface.h"
+#include "android/emulator-safe-shutdown.h"
 #include "android/skin/qt/emulator-no-qt-no-window.h"  // for EmulatorNoQtNo...
 #include "android/skin/rect.h"                         // for SkinRect, SkinPos
 #include "android/skin/winsys.h"                       // for WinsysPreferre...
@@ -125,6 +127,11 @@ extern void skin_winsys_enter_main_loop(bool no_window) {
     (void)no_window;
 
 #ifdef _WIN32
+    // Without a window Windows would end the process with the session and
+    // never say so (ModAVD#64).
+    android::startHeadlessSessionEndWatch(
+            [] { return android::emulation::AdbInterface::getGlobal(); });
+
     sWakeEvent = CreateEvent(NULL,   // Default security attributes
                              TRUE,   // Manual reset
                              FALSE,  // Initially nonsignaled

@@ -14,6 +14,36 @@ android_add_test(
       android/lean-window-frame_unittest.cpp
   DEPS aemu-ui-lean-window gmock_main)
 
+# ModAVD#64: the safe shutdown, without a windowing system either: the lean
+# window and the headless emulator both run it.
+android_add_library(
+  TARGET aemu-ui-safe-shutdown
+  LICENSE Apache-2.0
+  SOURCE_DIR src
+  INCLUDES include
+  SRC android/safe-shutdown.cpp
+  DEPS android-emu-adb-interface android-emu-base android-emu-base-headers
+       android-emu-utils)
+
+android_add_test(
+  TARGET aemu-ui-safe-shutdown_unittests
+  SOURCE_DIR test
+  SRC android/safe-shutdown_unittest.cpp
+  DEPS aemu-ui-safe-shutdown
+       android-emu-adb-interface
+       android-emu-agents
+       android-emu-avd
+       android-emu-base
+       android-emu-base-headers
+       android-emu-cmdline
+       android-emu-files
+       android-emu-utils
+       android-hw-config
+       android-net
+       crypto
+       gmock_main
+       ssl)
+
 android_qt_lib(
   TARGET aemu-ui-window
   # SHARED

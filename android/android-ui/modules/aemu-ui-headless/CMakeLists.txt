@@ -2,13 +2,15 @@
 android_qt_lib(
   TARGET aemu-ui-headless
   ALIAS ui::headless
-  SRC android/skin/event-headless.cpp
+  SRC android/emulator-safe-shutdown.cpp
+      android/headless-session-end.cpp
+      android/skin/event-headless.cpp
       android/skin/LibuiAgent.cpp
       android/skin/qt/emulator-no-qt-no-window.cpp
       android/skin/surface-headless.cpp
       android/skin/winsys-headless.cpp
       android/window-agent-headless-impl.cpp
-  DEPS android-emu ui::common ui::window)
+  DEPS aemu-ui-safe-shutdown android-emu ui::common ui::window)
 
 target_compile_definitions(aemu-ui-headless PRIVATE CONFIG_HEADLESS)
 
