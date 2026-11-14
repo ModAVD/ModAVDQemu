@@ -4074,8 +4074,13 @@ static int do_screenrecord_webrtc(ControlClient client, char* args) {
         if (name) {
             control_write(client, name);
             control_write(client, "\r\n");
+            return 0;
         }
-        return name ? 0 : -1;
+        // Without a reply line the client waits for OK / KO until it times
+        // out; say why instead.
+        control_write(client,
+                      "KO: unable to share frames (see the emulator log)\r\n");
+        return -1;
 
     } else if (splitArgs[0] == "stop") {
         return client->global->record_agent->stopSharedMemoryModule() ? 0 : -1;
