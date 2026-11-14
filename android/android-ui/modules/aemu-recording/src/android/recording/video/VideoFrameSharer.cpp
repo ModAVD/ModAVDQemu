@@ -87,9 +87,18 @@ void VideoFrameSharer::frameCallbackForwarder(void* opaque) {
 
 void VideoFrameSharer::start() {
     gpu_register_shared_memory_callback(&VideoFrameSharer::frameCallbackForwarder, this);
+    mStarted = true;
 }
 
 void VideoFrameSharer::stop() {
+    // A sharer whose initialize() failed is destroyed without ever starting.
+    // Unregistering then would drop the record counter below zero and ask the
+    // renderer to tear down a recording that never existed, which blocks the
+    // caller (the main loop) forever.
+    if (!mStarted) {
+        return;
+    }
+    mStarted = false;
     gpu_unregister_shared_memory_callback(this);
 }
 
