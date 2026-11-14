@@ -2476,7 +2476,32 @@ static int do_event_text(ControlClient client, char* args) {
     return 0;
 }
 
+// 'event key <code> <0|1>': presses or releases a key of the emulator's
+// keyboard, like the toolbar buttons do. <code> is a Linux input key code
+// (KEY_*: 158 is BACK, 172 the home page key). 'event send' cannot do this: it
+// sends to the touch screen, which has no such keys, and 'event text' only
+// types characters.
+static int do_event_key(ControlClient client, char* args) {
+    int code = 0, down = 0, len = 0;
+    if (!args || sscanf(args, "%d %d%n", &code, &down, &len) != 2 ||
+        len != (int)strlen(args) || code <= 0 || code > 0x3ff ||
+        (down != 0 && down != 1)) {
+        control_write(client, "KO: usage: event key <code> <0|1>\r\n");
+        return -1;
+    }
+    client->global->user_event_agent->sendKey(code, down == 1);
+    return 0;
+}
+
 static const CommandDefRec event_commands[] = {
+        {"key", "press or release a key",
+         "'event key <code> <0|1>' presses (1) or releases (0) a key of the "
+         "keyboard.\r\n"
+         "<code> is a Linux input key code from 1 to 1023, e.g. 158 for BACK, "
+         "172 for\r\n"
+         "the home page key or 28 for ENTER\r\n",
+         NULL, do_event_key, NULL},
+
         {"send", "send a series of events to the kernel",
          "'event send <type>:<code>:<value> ...' allows you to send one or "
          "more hardware events\r\n"
