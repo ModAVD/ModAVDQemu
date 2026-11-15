@@ -14,7 +14,10 @@
 #pragma once
 
 #include <QString>
+#include <QTimer>
 #include <QWidget>
+
+#include <functional>
 
 class QEvent;
 class QFrame;
@@ -24,9 +27,10 @@ class QResizeEvent;
 
 // The title bar the lean window draws itself (ModAVD#58), at the top of the
 // emulator window: the window's icon and title on the left, then back, home,
-// a divider, minimize and close on the right. It shows the title and icon of
-// the window it sits in. Moving the window by the title bar, and the system
-// menu, are the window's (WindowsLeanFrame); this only has the buttons.
+// a divider, minimize, maximize / restore (ModAVD#185) and close on the
+// right. It shows the title and icon of the window it sits in. Moving the
+// window by the title bar, and the system menu, are the window's
+// (WindowsLeanFrame); this only has the buttons.
 class LeanTitleBar : public QWidget {
     Q_OBJECT
 
@@ -43,7 +47,19 @@ public:
     QPushButton* backButton() const { return mBack; }
     QPushButton* homeButton() const { return mHome; }
     QPushButton* minimizeButton() const { return mMinimize; }
+    QPushButton* maximizeButton() const { return mMaximize; }
     QPushButton* closeButton() const { return mClose; }
+
+    // Where the maximize / restore button learns whether the window is
+    // maximized; it asks whenever the window's state or size changes.
+    // Without it the button takes the window to be maximized as Qt has it.
+    void setMaximizedQuery(std::function<bool()> query);
+    // Shows maximize or restore on the button, as the window is now.
+    void updateMaximizeButton();
+    // The mouse over the maximize / restore button when the window, not Qt,
+    // sees it (WindowsLeanFrame): highlighted while |hot|, pressed while
+    // |down|, with its tool tip after a while.
+    void setMaximizeButtonMouse(bool hot, bool down);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -53,6 +69,7 @@ private:
     QPushButton* addButton(const char* icon, const QString& tip, int iconSize);
     void updateTitle();
     void updateIcon();
+    void showMaximizeToolTip();
 
     QWidget* mWindow;
     QLabel* mIcon = nullptr;
@@ -61,5 +78,11 @@ private:
     QPushButton* mHome = nullptr;
     QFrame* mDivider = nullptr;
     QPushButton* mMinimize = nullptr;
+    QPushButton* mMaximize = nullptr;
     QPushButton* mClose = nullptr;
+    std::function<bool()> mMaximizedQuery;
+    // Whether the button shows restore.
+    bool mShowsRestore = false;
+    bool mMaximizeHot = false;
+    QTimer mMaximizeTipTimer;
 };

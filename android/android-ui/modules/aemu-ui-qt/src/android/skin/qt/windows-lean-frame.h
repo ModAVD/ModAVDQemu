@@ -29,7 +29,8 @@
 // bar and which the resize bands, and the system's move and size loops do the
 // rest. Dragging an edge keeps the guest screen's shape. Maximized or snapped
 // the window has another shape than the guest screen, which the container
-// then centers in it.
+// then centers in it. The title bar's maximize / restore button is the
+// system's maximize button to Windows (ModAVD#185).
 class WindowsLeanFrame {
 public:
     struct Geometry {
@@ -39,6 +40,11 @@ public:
         // pixels from the top-left corner of the window's visible part.
         int titleHeight = 0;
         int buttonsLeft = 0;
+        // The maximize / restore button takes [maxButtonLeft,
+        // maxButtonRight) of the title bar, the same way; none, and the
+        // button is an ordinary client one, while the two are equal.
+        int maxButtonLeft = 0;
+        int maxButtonRight = 0;
         // The guest screen's width / height; 0 while it is not known.
         double guestAspect = 0;
         // The smallest guest screen, in device pixels.
@@ -57,8 +63,16 @@ public:
 
     // |sizeMoveDone| is called when the system's move or size loop ends: the
     // window may have been resized, maximized or snapped.
+    //
+    // The maximize / restore button (ModAVD#185) is HTMAXBUTTON to Windows,
+    // so that Windows 11 shows its snap layouts over it, and the mouse over
+    // it is non-client: |maxButton| is called with what the non-client
+    // mouse messages make of it, whether the mouse is over it (|hot|), held
+    // down on it (|down|), and whether it was just clicked (|clicked|).
+    using MaxButtonFn = std::function<void(bool hot, bool down, bool clicked)>;
     WindowsLeanFrame(std::function<Geometry()> geometry,
-                     std::function<void()> sizeMoveDone);
+                     std::function<void()> sizeMoveDone,
+                     MaxButtonFn maxButton);
 
     // Gives the native window |wid| its frame: the caption, resizable frame
     // and maximize box styles, the frame extended into the client area for
@@ -79,6 +93,13 @@ public:
     // maximized, or snapped to a part of the screen.
     static bool heldBySystem(WId wid);
 
+    // Whether the window |wid| is maximized; snapped is not.
+    static bool isMaximized(WId wid);
+
+    // Maximizes the window |wid|, or restores it when it is maximized, with
+    // the system command a double click on the title bar gives it.
+    static void toggleMaximized(WId wid);
+
     // Handles a message (MSG*) of the window. Returns true, with the window
     // procedure's |result|, when it handled it.
     bool handleMessage(void* message, qintptr* result);
@@ -87,7 +108,13 @@ public:
     bool inSizeMove() const { return mInSizeMove; }
 
 private:
+    // Passes the maximize button's state on, if |clicked| or if it changed.
+    void reportMaxButton(const android::lean_window::MaxButtonTracker& before,
+                         bool clicked);
+
     std::function<Geometry()> mGeometry;
     std::function<void()> mSizeMoveDone;
+    MaxButtonFn mMaxButton;
+    android::lean_window::MaxButtonTracker mMaxButtonTracker;
     bool mInSizeMove = false;
 };

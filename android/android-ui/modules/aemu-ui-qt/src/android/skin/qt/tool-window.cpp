@@ -1003,6 +1003,13 @@ void ToolWindow::createLeanTitleBar() {
 
     QObject::connect(mLeanTitleBar->minimizeButton(), &QPushButton::clicked,
                      this, [this] { mEmulatorWindow->showMinimized(); });
+    // Maximize and restore go the way of a double click on the title bar
+    // (ModAVD#185); the button follows the window however it gets there.
+    EmulatorContainer* container = mEmulatorWindow->containerWindow();
+    mLeanTitleBar->setMaximizedQuery(
+            [container] { return container->isWindowMaximized(); });
+    QObject::connect(mLeanTitleBar->maximizeButton(), &QPushButton::clicked,
+                     this, [container] { container->toggleMaximized(); });
     QObject::connect(mLeanTitleBar->closeButton(), &QPushButton::clicked, this,
                      [this] { on_close_button_clicked(); });
 

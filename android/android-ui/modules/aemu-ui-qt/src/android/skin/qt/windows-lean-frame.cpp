@@ -74,8 +74,11 @@ lw::Rect visibleRect(HWND hwnd, const RECT& window) {
 }  // namespace
 
 WindowsLeanFrame::WindowsLeanFrame(std::function<Geometry()> geometry,
-                                   std::function<void()> sizeMoveDone)
-    : mGeometry(std::move(geometry)), mSizeMoveDone(std::move(sizeMoveDone)) {}
+                                   std::function<void()> sizeMoveDone,
+                                   MaxButtonFn maxButton)
+    : mGeometry(std::move(geometry)),
+      mSizeMoveDone(std::move(sizeMoveDone)),
+      mMaxButton(std::move(maxButton)) {}
 
 // static
 void WindowsLeanFrame::apply(WId wid) {
@@ -189,6 +192,32 @@ bool WindowsLeanFrame::heldBySystem(WId wid) {
     return isWindowArranged && isWindowArranged(hwnd);
 }
 
+// static
+bool WindowsLeanFrame::isMaximized(WId wid) {
+    HWND hwnd = reinterpret_cast<HWND>(wid);
+    return hwnd && IsZoomed(hwnd);
+}
+
+// static
+void WindowsLeanFrame::toggleMaximized(WId wid) {
+    HWND hwnd = reinterpret_cast<HWND>(wid);
+    if (!hwnd || IsIconic(hwnd)) {
+        return;
+    }
+    // Posted, like the system menu's commands: the button's click is still
+    // on the stack.
+    PostMessageW(hwnd, WM_SYSCOMMAND,
+                 static_cast<WPARAM>(lw::maxButtonCommand(IsZoomed(hwnd))), 0);
+}
+
+void WindowsLeanFrame::reportMaxButton(const lw::MaxButtonTracker& before,
+                                       bool clicked) {
+    if (mMaxButton && (clicked || before.hot != mMaxButtonTracker.hot ||
+                       before.down != mMaxButtonTracker.down)) {
+        mMaxButton(mMaxButtonTracker.hot, mMaxButtonTracker.down, clicked);
+    }
+}
+
 bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
     MSG* msg = static_cast<MSG*>(message);
     HWND hwnd = msg->hwnd;
@@ -223,7 +252,9 @@ bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
                     g.buttonsLeft,
                     maximized ? 0 : devicePixels(g.scale, kBorder),
                     maximized ? 0 : devicePixels(g.scale, kTopBorder),
-                    maximized ? 0 : devicePixels(g.scale, kCorner)};
+                    maximized ? 0 : devicePixels(g.scale, kCorner),
+                    g.maxButtonLeft,
+                    g.maxButtonRight};
             const lw::Hit hit =
                     lw::hitTest(layout, GET_X_LPARAM(msg->lParam) - visible.left,
                                 GET_Y_LPARAM(msg->lParam) - visible.top);
@@ -242,20 +273,80 @@ bool WindowsLeanFrame::handleMessage(void* message, qintptr* result) {
             return true;
         }
 
-        // WM_NCLBUTTONDOWN and WM_NCLBUTTONDBLCLK go on to DefWindowProc: on
-        // the title bar it activates the window, moves it in the system's
-        // move loop (which snaps it at the edges of the screen and maximizes
-        // it at the top) and maximizes or restores it on a double click; on a
-        // resize band it starts the system's size loop.
+        // The maximize / restore button is HTMAXBUTTON, so the mouse over it
+        // is non-client and the widget gets none of its events: its
+        // highlight and its click are worked out here. None of these go on
+        // to DefWindowProc, which would track the press itself and draw the
+        // system's own caption button over the title bar.
+        case WM_NCMOUSEMOVE: {
+            const lw::MaxButtonTracker before = mMaxButtonTracker;
+            const lw::Hit hit = static_cast<lw::Hit>(msg->wParam);
+            mMaxButtonTracker.move(hit);
+            reportMaxButton(before, false);
+            if (hit != lw::Hit::MaxButton) {
+                return false;
+            }
+            // WM_NCMOUSELEAVE once the mouse leaves the non-client part,
+            // onto the other buttons, the guest screen or another window.
+            TRACKMOUSEEVENT track = {};
+            track.cbSize = sizeof(track);
+            track.dwFlags = TME_LEAVE | TME_NONCLIENT;
+            track.hwndTrack = hwnd;
+            TrackMouseEvent(&track);
+            *result = 0;
+            return true;
+        }
+
+        case WM_NCMOUSELEAVE: {
+            const lw::MaxButtonTracker before = mMaxButtonTracker;
+            mMaxButtonTracker.leave();
+            reportMaxButton(before, false);
+            return false;
+        }
+
+        // Otherwise WM_NCLBUTTONDOWN and WM_NCLBUTTONDBLCLK go on to
+        // DefWindowProc: on the title bar it activates the window, moves it
+        // in the system's move loop (which snaps it at the edges of the
+        // screen and maximizes it at the top) and maximizes or restores it on
+        // a double click; on a resize band it starts the system's size loop.
+        case WM_NCLBUTTONDOWN:
+        case WM_NCLBUTTONDBLCLK: {
+            const lw::MaxButtonTracker before = mMaxButtonTracker;
+            const lw::Hit hit = static_cast<lw::Hit>(msg->wParam);
+            mMaxButtonTracker.press(hit);
+            reportMaxButton(before, false);
+            if (hit != lw::Hit::MaxButton) {
+                return false;
+            }
+            *result = 0;
+            return true;
+        }
+
+        case WM_NCLBUTTONUP: {
+            const lw::MaxButtonTracker before = mMaxButtonTracker;
+            const lw::Hit hit = static_cast<lw::Hit>(msg->wParam);
+            const bool clicked = mMaxButtonTracker.release(hit);
+            reportMaxButton(before, clicked);
+            if (hit != lw::Hit::MaxButton) {
+                return false;
+            }
+            *result = 0;
+            return true;
+        }
 
         case WM_NCRBUTTONDOWN:
-            if (msg->wParam != HTCAPTION) {
+            if (msg->wParam != HTCAPTION && msg->wParam != HTMAXBUTTON) {
                 return false;
             }
             *result = 0;
             return true;
 
         case WM_NCRBUTTONUP:
+            if (msg->wParam == HTMAXBUTTON) {
+                // No menu on the button, as on the system's.
+                *result = 0;
+                return true;
+            }
             if (msg->wParam != HTCAPTION) {
                 return false;
             }

@@ -286,6 +286,9 @@
         <file alias="home">images/dark/System_Home_white.svg</file>
         <file alias="laptop_mode">images/dark/laptop_mode_dark.svg</file>
         <file alias="minimize">images/dark/ic_remove_white_48dp.svg</file>
+        <!-- The lean title bar's maximize / restore button (ModAVD#185) -->
+        <file alias="window_maximize">images/dark/ic_window_maximize_white_48dp.svg</file>
+        <file alias="window_restore">images/dark/ic_window_restore_white_48dp.svg</file>
         <file alias="more">images/dark/ic_more_horiz_white_48dp.svg</file>
         <file alias="overview">images/dark/System_Overview_white.svg</file>
         <file alias="meta">images/dark/meta.svg</file>

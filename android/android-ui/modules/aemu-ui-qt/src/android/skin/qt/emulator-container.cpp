@@ -64,6 +64,8 @@ class QStyle;
 #endif
 
 #if defined(_WIN32)
+#include <QPushButton>
+
 #include "android/skin/qt/lean-title-bar.h"
 #include "android/skin/qt/windows-lean-frame.h"
 #include "android/skin/qt/windows-native-window.h"
@@ -103,6 +105,14 @@ static WindowsLeanFrame::Geometry leanFrameGeometry(
             window->toolWindow() ? window->toolWindow()->leanTitleBar() : nullptr;
     g.buttonsLeft = device(titleBar ? titleBar->buttonsLeft()
                                     : container->width());
+    // The maximize / restore button is the system's maximize button to
+    // Windows (ModAVD#185), while it can be clicked; disabled, during the
+    // safe shutdown, it is an ordinary client button again.
+    const QPushButton* maximize = titleBar ? titleBar->maximizeButton() : nullptr;
+    if (maximize && maximize->isVisible() && maximize->isEnabled()) {
+        g.maxButtonLeft = device(maximize->x());
+        g.maxButtonRight = device(maximize->x() + maximize->width());
+    }
     // The guest screen widget has the guest's shape, scaled.
     if (window->width() > 0 && window->height() > 0) {
         g.guestAspect = static_cast<double>(window->width()) / window->height();
@@ -156,6 +166,24 @@ EmulatorContainer::EmulatorContainer(EmulatorQtWindow* window)
                     // guest screen into it, once Qt has passed the last
                     // geometry change on to the widget.
                     mResizeTimer.start(0);
+                },
+                [this](bool hot, bool down, bool clicked) {
+                    // The mouse over the maximize / restore button, which Qt
+                    // does not see (ModAVD#185).
+                    LeanTitleBar* titleBar =
+                            mEmulatorWindow->toolWindow()
+                                    ? mEmulatorWindow->toolWindow()->leanTitleBar()
+                                    : nullptr;
+                    if (!titleBar) {
+                        return;
+                    }
+                    titleBar->setMaximizeButtonMouse(hot, down);
+                    if (clicked) {
+                        // As if Qt had seen the click: nothing while the
+                        // button is disabled, and the same path as a click
+                        // from UI Automation.
+                        titleBar->maximizeButton()->click();
+                    }
                 });
 #endif
     } else {
@@ -721,6 +749,29 @@ bool EmulatorContainer::heldBySystem() const {
 #else
     return false;
 #endif
+}
+
+bool EmulatorContainer::isWindowMaximized() const {
+#ifdef _WIN32
+    if (mLeanFrame && internalWinId()) {
+        return WindowsLeanFrame::isMaximized(internalWinId());
+    }
+#endif
+    return isMaximized();
+}
+
+void EmulatorContainer::toggleMaximized() {
+#ifdef _WIN32
+    if (mLeanFrame && internalWinId()) {
+        WindowsLeanFrame::toggleMaximized(internalWinId());
+        return;
+    }
+#endif
+    if (isMaximized()) {
+        showNormal();
+    } else {
+        showMaximized();
+    }
 }
 
 bool EmulatorContainer::nativeEvent(const QByteArray& eventType,

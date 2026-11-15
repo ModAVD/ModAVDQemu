@@ -289,3 +289,156 @@ TEST(LeanWindowFrame, VisiblePartOfAMaximizedWindow) {
     EXPECT_EQ(u.left, 3000);
     EXPECT_EQ(u.right, 3400);
 }
+
+namespace {
+
+// The title bar with the maximize / restore button (ModAVD#185): back, home,
+// a divider, minimize, maximize and close, 5 x 40 + 9 px; the maximize button
+// takes [640, 680), close [680, 720).
+const lw::Layout kMaxLayout = {/*width=*/720,     /*height=*/1312,
+                               /*titleHeight=*/32, /*buttonsLeft=*/511,
+                               /*border=*/5,       /*topBorder=*/4,
+                               /*corner=*/16,      /*maxButtonLeft=*/640,
+                               /*maxButtonRight=*/680};
+
+Hit maxAt(int x, int y) {
+    return lw::hitTest(kMaxLayout, x, y);
+}
+
+}  // namespace
+
+TEST(LeanWindowFrame, HitTestMaxButton) {
+    EXPECT_EQ(maxAt(640, 16), Hit::MaxButton);  // first pixel
+    EXPECT_EQ(maxAt(679, 16), Hit::MaxButton);  // last pixel
+    EXPECT_EQ(maxAt(639, 16), Hit::Client);     // minimize
+    EXPECT_EQ(maxAt(680, 16), Hit::Client);     // close
+    EXPECT_EQ(maxAt(660, 31), Hit::MaxButton);  // bottom row of the title bar
+    EXPECT_EQ(maxAt(660, 32), Hit::Client);     // guest screen below
+    EXPECT_EQ(maxAt(510, 16), Hit::Caption);
+    EXPECT_EQ(maxAt(511, 16), Hit::Client);     // back
+}
+
+TEST(LeanWindowFrame, HitTestMaxButtonUpToTheTopEdge) {
+    // Like the other buttons it reaches the top edge, over the top band.
+    EXPECT_EQ(maxAt(660, 0), Hit::MaxButton);
+    EXPECT_EQ(maxAt(660, 3), Hit::MaxButton);
+    EXPECT_EQ(maxAt(600, 0), Hit::Client);
+    EXPECT_EQ(maxAt(100, 0), Hit::Top);
+}
+
+TEST(LeanWindowFrame, HitTestMaxButtonKeepsTheBands) {
+    // A narrow window whose button runs into the right corner: the corner
+    // and the right edge still resize.
+    lw::Layout l = kMaxLayout;
+    l.maxButtonLeft = 690;
+    l.maxButtonRight = 720;
+    EXPECT_EQ(lw::hitTest(l, 719, 16), Hit::Right);
+    EXPECT_EQ(lw::hitTest(l, 710, 2), Hit::TopRight);
+    EXPECT_EQ(lw::hitTest(l, 700, 2), Hit::MaxButton);
+    EXPECT_EQ(lw::hitTest(l, 700, 20), Hit::MaxButton);
+}
+
+TEST(LeanWindowFrame, HitTestWithoutMaxButton) {
+    // An empty range (the button disabled or hidden): all of the buttons are
+    // client, as before.
+    lw::Layout l = kMaxLayout;
+    l.maxButtonLeft = 0;
+    l.maxButtonRight = 0;
+    for (int x : {511, 600, 640, 660, 679, 700}) {
+        EXPECT_EQ(lw::hitTest(l, x, 16), Hit::Client) << x;
+    }
+    EXPECT_EQ(lw::hitTest(l, 0, 16), Hit::Left);
+    EXPECT_EQ(lw::hitTest(l, 100, 16), Hit::Caption);
+    // A layout without the two fields has no button either.
+    EXPECT_EQ(at(660, 16), Hit::Client);
+}
+
+TEST(LeanWindowFrame, HitTestMaxButtonMaximized) {
+    // Maximized at 150%: no bands, the button reaches the top edge and the
+    // range is in device pixels like the rest.
+    const lw::Layout l = {1920, 1032, 48, 1607, 0, 0, 0, 1800, 1860};
+    EXPECT_EQ(lw::hitTest(l, 1800, 0), Hit::MaxButton);
+    EXPECT_EQ(lw::hitTest(l, 1859, 47), Hit::MaxButton);
+    EXPECT_EQ(lw::hitTest(l, 1860, 0), Hit::Client);
+    EXPECT_EQ(lw::hitTest(l, 1799, 0), Hit::Client);
+    EXPECT_EQ(lw::hitTest(l, 1830, 48), Hit::Client);
+}
+
+TEST(LeanWindowFrame, MaxButtonIsNotAResize) {
+    EXPECT_FALSE(lw::isResize(Hit::MaxButton));
+    EXPECT_EQ(static_cast<int>(Hit::MaxButton), 9);  // HTMAXBUTTON
+}
+
+TEST(LeanWindowFrame, MaxButtonFace) {
+    EXPECT_EQ(lw::maxButtonFace(false), lw::MaxButtonFace::Maximize);
+    EXPECT_EQ(lw::maxButtonFace(true), lw::MaxButtonFace::Restore);
+}
+
+TEST(LeanWindowFrame, MaxButtonCommand) {
+    EXPECT_EQ(lw::maxButtonCommand(false), 0xF030u);  // SC_MAXIMIZE
+    EXPECT_EQ(lw::maxButtonCommand(true), 0xF120u);   // SC_RESTORE
+}
+
+TEST(LeanWindowFrame, MaxButtonTrackerClick) {
+    lw::MaxButtonTracker t;
+    EXPECT_FALSE(t.hot);
+    EXPECT_FALSE(t.down);
+    t.move(Hit::MaxButton);
+    EXPECT_TRUE(t.hot);
+    EXPECT_FALSE(t.down);
+    t.press(Hit::MaxButton);
+    EXPECT_TRUE(t.hot);
+    EXPECT_TRUE(t.down);
+    EXPECT_TRUE(t.release(Hit::MaxButton));
+    EXPECT_TRUE(t.hot);  // still over it
+    EXPECT_FALSE(t.down);
+    // A second release is no second click.
+    EXPECT_FALSE(t.release(Hit::MaxButton));
+}
+
+TEST(LeanWindowFrame, MaxButtonTrackerReleaseWithoutPress) {
+    lw::MaxButtonTracker t;
+    t.move(Hit::MaxButton);
+    EXPECT_FALSE(t.release(Hit::MaxButton));
+    // Pressed on the title bar, released over the button.
+    t.press(Hit::Caption);
+    EXPECT_FALSE(t.hot);
+    EXPECT_FALSE(t.down);
+    EXPECT_FALSE(t.release(Hit::MaxButton));
+}
+
+TEST(LeanWindowFrame, MaxButtonTrackerPressLeavesTheButton) {
+    // Moved off the button while pressed: the press is given up, also when
+    // the mouse comes back before the release.
+    lw::MaxButtonTracker t;
+    t.press(Hit::MaxButton);
+    t.move(Hit::Caption);
+    EXPECT_FALSE(t.hot);
+    EXPECT_FALSE(t.down);
+    t.move(Hit::MaxButton);
+    EXPECT_TRUE(t.hot);
+    EXPECT_FALSE(t.down);
+    EXPECT_FALSE(t.release(Hit::MaxButton));
+
+    t.press(Hit::MaxButton);
+    t.leave();  // onto another button, which is client area
+    EXPECT_FALSE(t.hot);
+    EXPECT_FALSE(t.down);
+    EXPECT_FALSE(t.release(Hit::MaxButton));
+
+    t.press(Hit::MaxButton);
+    EXPECT_FALSE(t.release(Hit::Caption));
+    EXPECT_FALSE(t.hot);
+    EXPECT_FALSE(t.down);
+}
+
+TEST(LeanWindowFrame, MaxButtonTrackerDoubleClick) {
+    // The second press of a double click comes as WM_NCLBUTTONDBLCLK, also a
+    // press: two clicks, maximized and restored again, as with the system's
+    // button.
+    lw::MaxButtonTracker t;
+    t.press(Hit::MaxButton);
+    EXPECT_TRUE(t.release(Hit::MaxButton));
+    t.press(Hit::MaxButton);
+    EXPECT_TRUE(t.release(Hit::MaxButton));
+}

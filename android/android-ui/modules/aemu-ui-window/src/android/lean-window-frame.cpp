@@ -19,6 +19,16 @@
 namespace android {
 namespace lean_window {
 
+namespace {
+
+// A point of the buttons: the maximize / restore button or another one.
+Hit buttonAt(const Layout& l, int x) {
+    return x >= l.maxButtonLeft && x < l.maxButtonRight ? Hit::MaxButton
+                                                        : Hit::Client;
+}
+
+}  // namespace
+
 Hit hitTest(const Layout& l, int x, int y) {
     if (x < 0 || y < 0 || x >= l.width || y >= l.height) {
         return Hit::Nowhere;
@@ -44,7 +54,7 @@ Hit hitTest(const Layout& l, int x, int y) {
             return Hit::TopRight;
         }
         // The buttons reach up to the top edge.
-        return x >= l.buttonsLeft ? Hit::Client : Hit::Top;
+        return x >= l.buttonsLeft ? buttonAt(l, x) : Hit::Top;
     }
     if (left) {
         return nearTop ? Hit::TopLeft
@@ -55,9 +65,42 @@ Hit hitTest(const Layout& l, int x, int y) {
                        : (nearBottom ? Hit::BottomRight : Hit::Right);
     }
     if (y < l.titleHeight) {
-        return x >= l.buttonsLeft ? Hit::Client : Hit::Caption;
+        return x >= l.buttonsLeft ? buttonAt(l, x) : Hit::Caption;
     }
     return Hit::Client;
+}
+
+MaxButtonFace maxButtonFace(bool maximized) {
+    return maximized ? MaxButtonFace::Restore : MaxButtonFace::Maximize;
+}
+
+unsigned maxButtonCommand(bool maximized) {
+    // SC_RESTORE and SC_MAXIMIZE.
+    return maximized ? 0xF120u : 0xF030u;
+}
+
+void MaxButtonTracker::move(Hit hit) {
+    hot = hit == Hit::MaxButton;
+    if (!hot) {
+        down = false;
+    }
+}
+
+void MaxButtonTracker::press(Hit hit) {
+    hot = hit == Hit::MaxButton;
+    down = hot;
+}
+
+bool MaxButtonTracker::release(Hit hit) {
+    const bool clicked = down && hit == Hit::MaxButton;
+    hot = hit == Hit::MaxButton;
+    down = false;
+    return clicked;
+}
+
+void MaxButtonTracker::leave() {
+    hot = false;
+    down = false;
 }
 
 bool isResize(Hit hit) {

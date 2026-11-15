@@ -98,6 +98,12 @@ public:
     // Whether the system holds the window at a size of its own choosing:
     // maximized or snapped.
     bool heldBySystem() const;
+    // Whether the window is maximized, as the system has it; snapped is not.
+    bool isWindowMaximized() const;
+    // The lean title bar's maximize / restore button (ModAVD#185): maximizes
+    // the window, or restores it when it is maximized. On Windows that is the
+    // system command a double click on the title bar gives.
+    void toggleMaximized();
 
 protected:
     bool nativeEvent(const QByteArray& eventType,

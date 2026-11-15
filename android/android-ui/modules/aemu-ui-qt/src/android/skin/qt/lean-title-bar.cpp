@@ -14,6 +14,7 @@
 #include "android/skin/qt/lean-title-bar.h"
 
 #include <QApplication>
+#include <QCursor>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QFrame>
@@ -23,17 +24,25 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSize>
+#include <QStyle>
+#include <QToolTip>
 
 #include <algorithm>
+#include <utility>
+
+#include "android/lean-window-frame.h"
 
 namespace {
 
 // The palette of the lean window, the same as its navigation buttons had.
+// leanHot is the maximize / restore button's highlight while the window, not
+// Qt, sees the mouse over it.
 constexpr char kStyle[] =
         "#leanTitleBar { background: #20212D; }"
         "#leanTitleBar QLabel { color: #E8E8EC; background: transparent; }"
         "#leanTitleBar QPushButton { background: #20212D; border: 0; }"
         "#leanTitleBar QPushButton:hover { background: #303142; }"
+        "#leanTitleBar QPushButton[leanHot=\"true\"] { background: #303142; }"
         "#leanTitleBar QPushButton:pressed { background: #3B3D52; }"
         "#leanTitleBar QPushButton:disabled { background: #20212D; }"
         "#leanTitleBarDivider { background: #3B3D52; border: 0; }";
@@ -72,6 +81,8 @@ LeanTitleBar::LeanTitleBar(QWidget* window) : QWidget(window), mWindow(window) {
     mDivider->setObjectName(QStringLiteral("leanTitleBarDivider"));
     mDivider->setFixedSize(1, 16);
     mMinimize = addButton("minimize", QString::fromUtf8("最小化"), kWindowIconSize);
+    mMaximize = addButton("window_maximize", QString::fromUtf8("最大化"),
+                          kWindowIconSize);
     mClose = addButton("close", QString::fromUtf8("关机"), kWindowIconSize);
 
     layout->addWidget(mBack);
@@ -80,11 +91,20 @@ LeanTitleBar::LeanTitleBar(QWidget* window) : QWidget(window), mWindow(window) {
     layout->addWidget(mDivider, 0, Qt::AlignVCenter);
     layout->addSpacing(4);
     layout->addWidget(mMinimize);
+    layout->addWidget(mMaximize);
     layout->addWidget(mClose);
+
+    // The tool tip of the maximize / restore button while the window sees
+    // the mouse over it: Qt shows none for a widget it gets no mouse events
+    // for.
+    mMaximizeTipTimer.setSingleShot(true);
+    connect(&mMaximizeTipTimer, &QTimer::timeout, this,
+            &LeanTitleBar::showMaximizeToolTip);
 
     mWindow->installEventFilter(this);
     updateTitle();
     updateIcon();
+    updateMaximizeButton();
 }
 
 QPushButton* LeanTitleBar::addButton(const char* icon,
@@ -115,13 +135,84 @@ int LeanTitleBar::buttonsLeft() const {
 }
 
 void LeanTitleBar::setButtonsEnabled(bool enabled) {
-    for (QPushButton* button : {mBack, mHome, mMinimize, mClose}) {
+    for (QPushButton* button : {mBack, mHome, mMinimize, mMaximize, mClose}) {
         button->setEnabled(enabled);
+    }
+    if (!enabled) {
+        setMaximizeButtonMouse(false, false);
+    }
+}
+
+void LeanTitleBar::setMaximizedQuery(std::function<bool()> query) {
+    mMaximizedQuery = std::move(query);
+    updateMaximizeButton();
+}
+
+void LeanTitleBar::updateMaximizeButton() {
+    const bool maximized =
+            mMaximizedQuery ? mMaximizedQuery() : mWindow->isMaximized();
+    const bool restore = android::lean_window::maxButtonFace(maximized) ==
+                         android::lean_window::MaxButtonFace::Restore;
+    if (restore == mShowsRestore) {
+        // addButton() gave it the maximize face.
+        return;
+    }
+    mShowsRestore = restore;
+    const QString tip = restore ? QString::fromUtf8("还原")
+                                : QString::fromUtf8("最大化");
+    // The dark theme's icons are drawn light, as in addButton().
+    mMaximize->setIcon(QIcon(restore ? QStringLiteral(":/dark/window_restore")
+                                     : QStringLiteral(":/dark/window_maximize")));
+    mMaximize->setToolTip(tip);
+    // Screen readers and UI Automation hear of the new name.
+    mMaximize->setAccessibleName(tip);
+    if (QToolTip::isVisible() && mMaximizeHot) {
+        showMaximizeToolTip();
+    }
+}
+
+void LeanTitleBar::setMaximizeButtonMouse(bool hot, bool down) {
+    if (!mMaximize->isEnabled()) {
+        hot = false;
+        down = false;
+    }
+    if (hot != mMaximizeHot) {
+        mMaximizeHot = hot;
+        mMaximize->setProperty("leanHot", hot);
+        // A style sheet reads a dynamic property only when polished again.
+        mMaximize->style()->unpolish(mMaximize);
+        mMaximize->style()->polish(mMaximize);
+        if (hot) {
+            mMaximizeTipTimer.start(
+                    style()->styleHint(QStyle::SH_ToolTip_WakeUpDelay));
+        } else {
+            mMaximizeTipTimer.stop();
+            if (QToolTip::isVisible() && QToolTip::text() == mMaximize->toolTip()) {
+                QToolTip::hideText();
+            }
+        }
+    }
+    if (down != mMaximize->isDown()) {
+        mMaximize->setDown(down);
+    }
+    mMaximize->update();
+}
+
+void LeanTitleBar::showMaximizeToolTip() {
+    if (mMaximizeHot) {
+        QToolTip::showText(QCursor::pos(), mMaximize->toolTip(), mMaximize);
     }
 }
 
 bool LeanTitleBar::eventFilter(QObject* watched, QEvent* event) {
     if (watched == mWindow) {
+        if (event->type() == QEvent::WindowStateChange ||
+            event->type() == QEvent::Resize || event->type() == QEvent::Show) {
+            // Maximized or restored by the button, a double click on the
+            // title bar, Win+Up / Win+Down, a drag to the top of the screen
+            // or the system menu (ModAVD#185).
+            updateMaximizeButton();
+        }
         if (event->type() == QEvent::WindowTitleChange) {
             updateTitle();
         } else if (event->type() == QEvent::WindowIconChange ||

@@ -27,6 +27,9 @@ enum class Hit : int {
     Nowhere = 0,
     Client = 1,
     Caption = 2,
+    // The title bar's maximize / restore button (ModAVD#185): Windows 11
+    // shows its snap layouts over it.
+    MaxButton = 9,
     Left = 10,
     Right = 11,
     Top = 12,
@@ -66,13 +69,50 @@ struct Layout {
     // How far from a corner, along either edge, the corner's diagonal resize
     // reaches.
     int corner;
+    // The maximize / restore button takes [maxButtonLeft, maxButtonRight) of
+    // the title bar, inside the buttons; none while the two are equal.
+    int maxButtonLeft = 0;
+    int maxButtonRight = 0;
 };
 
 // What is under the point (x, y) of the window: a resize band, the part of the
-// title bar that moves the window, or the client (the buttons, the guest
-// screen). The buttons stay clickable except in the bands of the corners and
-// along the right edge.
+// title bar that moves the window, the maximize / restore button, or the
+// client (the other buttons, the guest screen). The buttons stay clickable
+// except in the bands of the corners and along the right edge.
 Hit hitTest(const Layout& layout, int x, int y);
+
+// The maximize / restore button (ModAVD#185) shows what a click does: maximize
+// the window, or restore a maximized one. A snapped window is not maximized.
+enum class MaxButtonFace { Maximize, Restore };
+MaxButtonFace maxButtonFace(bool maximized);
+
+// The system command a click on the button gives the window, the one a double
+// click on the title bar gives too: SC_RESTORE for a maximized window,
+// SC_MAXIMIZE for any other.
+unsigned maxButtonCommand(bool maximized);
+
+// The button as the window's non-client mouse messages leave it. While the
+// window answers WM_NCHITTEST with HTMAXBUTTON for the button, the mouse over
+// it is non-client to Windows: the widget gets no mouse events, so its
+// highlight and its click come from WM_NCMOUSEMOVE, WM_NCLBUTTONDOWN,
+// WM_NCLBUTTONUP and WM_NCMOUSELEAVE here, each with the hit-test code of
+// the point. Without the mouse captured, a press that leaves the button is
+// given up: a release elsewhere never comes here.
+struct MaxButtonTracker {
+    // The mouse is over the button.
+    bool hot = false;
+    // The left button went down on it and has not been released.
+    bool down = false;
+
+    // WM_NCMOUSEMOVE.
+    void move(Hit hit);
+    // WM_NCLBUTTONDOWN or WM_NCLBUTTONDBLCLK.
+    void press(Hit hit);
+    // WM_NCLBUTTONUP; true when that completes a click on the button.
+    bool release(Hit hit);
+    // WM_NCMOUSELEAVE: the mouse left the non-client part of the window.
+    void leave();
+};
 
 // Whether |hit| resizes the window.
 bool isResize(Hit hit);
