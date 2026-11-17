@@ -109,9 +109,17 @@ std::vector<std::string> getMusicVolumeArgs() {
             kMusicStream, "--get"};
 }
 
+// On API 34 the shell's own `cmd media_session volume --set` is turned down
+// (AppOps: com.android.server.media from uid 2000 may not
+// AUDIO_MEDIA_VOLUME), while reading works. So the set goes through su first
+// and falls back to the shell only where there is no su. adb shell joins the
+// words and runs them in the guest's sh, so the || is the guest's.
 std::vector<std::string> setMusicVolumeArgs(int index) {
-    return {"shell", "cmd",    "media_session", "volume", "--stream",
-            kMusicStream, "--set", std::to_string(index)};
+    const std::string value = std::to_string(index);
+    return {"shell",  "su",           "0",      "cmd",      "media_session",
+            "volume", "--stream",     kMusicStream, "--set", value,
+            "||",     "cmd",          "media_session", "volume", "--stream",
+            kMusicStream, "--set",    value};
 }
 
 std::optional<StreamVolume> parseStreamVolume(std::string_view output) {

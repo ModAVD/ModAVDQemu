@@ -82,11 +82,15 @@ TEST(LeanTitleBarLogic, VolumeArgs) {
     EXPECT_EQ(tb::getMusicVolumeArgs(),
               (std::vector<std::string>{"shell", "cmd", "media_session",
                                         "volume", "--stream", "3", "--get"}));
+    // su first (the shell's own set is refused on API 34), the shell after.
     EXPECT_EQ(tb::setMusicVolumeArgs(7),
-              (std::vector<std::string>{"shell", "cmd", "media_session",
-                                        "volume", "--stream", "3", "--set",
-                                        "7"}));
+              (std::vector<std::string>{
+                      "shell", "su", "0", "cmd", "media_session", "volume",
+                      "--stream", "3", "--set", "7", "||", "cmd",
+                      "media_session", "volume", "--stream", "3", "--set",
+                      "7"}));
     EXPECT_EQ(tb::setMusicVolumeArgs(0).back(), "0");
+    EXPECT_EQ(tb::setMusicVolumeArgs(0)[9], "0");
 }
 
 TEST(LeanTitleBarLogic, ParseStreamVolume) {
