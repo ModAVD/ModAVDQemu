@@ -248,6 +248,51 @@ TEST_F(AdbInterfaceTest, selectMatchingAdb) {
 
     daemon->setProtocolVersion(android::base::makeOptional(2));
     EXPECT_EQ("v2", adb->adbPath());
+    // Different protocols: the daemon decides.
+    EXPECT_GT(daemon->queries(), 0);
+}
+
+TEST_F(AdbInterfaceTest, sameProtocolDoesNotAskDaemon) {
+    auto daemon = new FakeAdbDaemon();
+    auto locator = new StaticAdbLocator({{"a", 41}, {"b", 41}});
+    auto adb = AdbInterface::Builder()
+                       .setLooper(mLooper)
+                       .setAdbLocator(locator)
+                       .setAdbDaemon(daemon)
+                       .build();
+
+    daemon->setProtocolVersion(android::base::makeOptional(41));
+    EXPECT_EQ("a", adb->adbPath());
+    EXPECT_EQ("a", adb->adbPath());
+    EXPECT_TRUE(adb->isAdbVersionCurrent());
+    EXPECT_EQ(0, daemon->queries());
+}
+
+TEST_F(AdbInterfaceTest, sameStaleProtocolIsNotCurrent) {
+    auto daemon = new FakeAdbDaemon();
+    auto locator = new StaticAdbLocator({{"a", 31}, {"b", 31}});
+    auto adb = AdbInterface::Builder()
+                       .setLooper(mLooper)
+                       .setAdbLocator(locator)
+                       .setAdbDaemon(daemon)
+                       .build();
+
+    EXPECT_EQ("a", adb->adbPath());
+    EXPECT_FALSE(adb->isAdbVersionCurrent());
+    EXPECT_EQ(0, daemon->queries());
+}
+
+TEST_F(AdbInterfaceTest, minimumProtocolIsCurrent) {
+    auto daemon = new FakeAdbDaemon();
+    auto locator = new StaticAdbLocator({{"a", 32}});
+    auto adb = AdbInterface::Builder()
+                       .setLooper(mLooper)
+                       .setAdbLocator(locator)
+                       .setAdbDaemon(daemon)
+                       .build();
+
+    EXPECT_EQ("a", adb->adbPath());
+    EXPECT_TRUE(adb->isAdbVersionCurrent());
 }
 
 TEST_F(AdbInterfaceTest, useSerialNumberFromAgent) {

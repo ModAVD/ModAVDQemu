@@ -15,6 +15,7 @@
 #include "android/emulation/control/adb/AdbInterface.h"
 
 #include <assert.h>    // for assert
+#include <algorithm>   // for all_of, sort
 #include <fcntl.h>     // for O_CREAT, O_EXCL, O_RDONLY
 #include <inttypes.h>  // for PRId64
 #include <stdint.h>    // for int64_t
@@ -466,6 +467,21 @@ void AdbInterfaceImpl::selectAdbPath() {
 
     Optional<int> adbVersion;
     std::string adbPath;
+
+    // MAS local: when every install speaks the same protocol the daemon
+    // cannot change the pick, so do not ask it. Asking connects to the adb
+    // server on the caller's thread (often the UI thread), and a connect to a
+    // stopped server on Windows takes a second or two.
+    const auto& first = mAvailableAdbInstalls.front();
+    if (std::all_of(mAvailableAdbInstalls.begin(), mAvailableAdbInstalls.end(),
+                    [&first](const AdbEntry& entry) {
+                        return entry.second == first.second;
+                    })) {
+        mAutoAdbPath = first.first;
+        mAdbVersionCurrent =
+                first.second ? *first.second >= kMinAdbProtocol : false;
+        return;
+    }
 
     // Maybe we can find one matching the current active version.
     // Even if this might be an ancient adb version.

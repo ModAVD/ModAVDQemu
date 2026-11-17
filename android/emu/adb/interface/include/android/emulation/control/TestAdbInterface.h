@@ -46,12 +46,19 @@ public:
 
 class FakeAdbDaemon : public AdbDaemon {
  public:
-    Optional<int> getProtocolVersion() override { return mVersion; }
+    Optional<int> getProtocolVersion() override {
+        ++mQueries;
+        return mVersion;
+    }
 
     void setProtocolVersion(Optional<int> version) { mVersion = version; }
 
+    // How often the daemon was asked for its version.
+    int queries() const { return mQueries; }
+
  private:
     Optional<int> mVersion;
+    int mQueries = 0;
 };
 }  // namespace emulation
 }  // namespace android
