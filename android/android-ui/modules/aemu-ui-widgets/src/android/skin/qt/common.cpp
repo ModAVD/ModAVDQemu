@@ -104,6 +104,11 @@ QString getScreenshotSaveDirectory() {
         savePath = getConsoleAgents()
                            ->settings->android_cmdLineOptions()
                            ->save_path;
+        // The manager names a folder (Pictures\ModAVD, ModAVD#231) that may
+        // not be there yet.
+        if (!savePath.isEmpty() && !QDir(savePath).exists()) {
+            QDir().mkpath(savePath);
+        }
     } else {
         savePath = settings.value(Ui::Settings::SAVE_PATH, "").toString();
     }

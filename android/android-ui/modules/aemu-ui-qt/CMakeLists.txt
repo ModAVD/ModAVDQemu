@@ -30,6 +30,7 @@ android_qt_lib(
       android/skin/qt/GlassesStatusOverlay.cpp
       android/skin/qt/init-qt.cpp
       android/skin/qt/lean-title-bar.cpp
+      android/skin/qt/lean-volume.cpp
       android/skin/qt/left-hand-dialog.cpp
       android/skin/qt/left-hand-dialog.ui
       android/skin/qt/ModalOverlay.cpp

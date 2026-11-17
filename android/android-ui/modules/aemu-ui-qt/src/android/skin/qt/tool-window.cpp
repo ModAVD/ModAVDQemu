@@ -92,7 +92,9 @@
 #include "android/skin/qt/extended-pages/common.h"
 #include "android/skin/qt/extended-pages/virtual-sensors-page.h"
 #include "android/skin/qt/extended-window.h"
+#include "android/lean-title-bar-logic.h"
 #include "android/skin/qt/lean-title-bar.h"
+#include "android/skin/qt/lean-volume.h"
 #include "android/skin/qt/posture-selection-dialog.h"
 #include "android/skin/qt/qt-settings.h"
 #include "android/skin/qt/qt-ui-commands.h"
@@ -673,11 +675,12 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
 
     if (leanToolbar()) {
         // Hide everything else; all_apps_button remains the home button for
-        // AVDs that use AllAppsForHomeTray.
+        // AVDs that use AllAppsForHomeTray. The screenshot button stays
+        // (ModAVD#231); on Windows the title bar has its own.
         const QPushButton* keep[] = {
                 mToolsUi->close_button,    mToolsUi->minimize_button,
                 mToolsUi->back_button,     mToolsUi->home_button,
-                mToolsUi->all_apps_button,
+                mToolsUi->all_apps_button, mToolsUi->scrShot_button,
         };
         for (QPushButton* button : findChildren<QPushButton*>()) {
             if (std::find(std::begin(keep), std::end(keep), button) ==
@@ -719,6 +722,7 @@ ToolWindow::ToolWindow(EmulatorQtWindow* window,
         mToolsUi->back_button->setToolTip(QString::fromUtf8("返回"));
         mToolsUi->home_button->setToolTip(QString::fromUtf8("主页"));
         mToolsUi->all_apps_button->setToolTip(QString::fromUtf8("主页"));
+        mToolsUi->scrShot_button->setToolTip(QString::fromUtf8("截图"));
         if (inWindowNav()) {
             mToolsUi->close_button->hide();
             mToolsUi->minimize_button->hide();
@@ -973,10 +977,32 @@ void ToolWindow::createLeanTitleBar() {
     if (mLeanTitleBar) {
         return;
     }
-    mLeanTitleBar = new LeanTitleBar(mEmulatorWindow->containerWindow());
+    // The volume button only while the emulator plays sound (ModAVD#226):
+    // the manager passes -audio none when the instance's sound is off.
+    const AndroidOptions* options =
+            getConsoleAgents()->settings->android_cmdLineOptions();
+    const bool volumeShown = android::lean_title_bar::volumeButtonShown(
+            options->audio, options->no_audio || options->noaudio);
+    mLeanTitleBar = new LeanTitleBar(mEmulatorWindow->containerWindow(),
+                                     volumeShown);
     // Room for it from the start, before the guest screen is placed.
     mEmulatorWindow->containerWindow()->setLeanTitleBarHeight(
             LeanTitleBar::kHeight);
+
+    // The screenshot goes where -save-path says, as the side toolbar's
+    // (ModAVD#231).
+    QObject::connect(mLeanTitleBar->screenshotButton(), &QPushButton::clicked,
+                     this, [this] {
+                         handleUICommand(QtUICommand::TAKE_SCREENSHOT, true);
+                     });
+    if (volumeShown) {
+        EmulatorQtWindow* window = mEmulatorWindow;
+        auto* volume = new LeanVolumeControl(
+                mLeanTitleBar, [window] { return window->getAdbInterface(); });
+        // The AdbInterface finds adb when it is first asked for; ask once
+        // the window is up.
+        QTimer::singleShot(0, volume, [volume] { volume->checkAvailable(); });
+    }
 
     QPushButton* back = mLeanTitleBar->backButton();
     back->setVisible(!mToolsUi->back_button->isHidden());

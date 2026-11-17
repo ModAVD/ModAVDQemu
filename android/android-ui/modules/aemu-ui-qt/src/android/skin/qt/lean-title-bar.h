@@ -26,11 +26,12 @@ class QPushButton;
 class QResizeEvent;
 
 // The title bar the lean window draws itself (ModAVD#58), at the top of the
-// emulator window: the window's icon and title on the left, then back, home,
-// a divider, minimize, maximize / restore (ModAVD#185) and close on the
-// right. It shows the title and icon of the window it sits in. Moving the
-// window by the title bar, and the system menu, are the window's
-// (WindowsLeanFrame); this only has the buttons.
+// emulator window: the window's icon and title on the left, then screenshot
+// (ModAVD#231), volume while the emulator plays sound (ModAVD#226), back,
+// home, a divider, minimize, maximize / restore (ModAVD#185) and close on the
+// right (lean_title_bar::items()). It shows the title and icon of the window
+// it sits in. Moving the window by the title bar, and the system menu, are
+// the window's (WindowsLeanFrame); this only has the buttons.
 class LeanTitleBar : public QWidget {
     Q_OBJECT
 
@@ -38,12 +39,22 @@ public:
     // Logical pixels.
     static constexpr int kHeight = 32;
 
-    explicit LeanTitleBar(QWidget* window);
+    LeanTitleBar(QWidget* window, bool volumeShown);
 
     // Where the buttons start, in logical pixels from the left edge.
     int buttonsLeft() const;
     void setButtonsEnabled(bool enabled);
 
+    QPushButton* screenshotButton() const { return mScreenshot; }
+    // Null without sound.
+    QPushButton* volumeButton() const { return mVolume; }
+    // Whether the volume button can be used: without adb it is disabled
+    // and its tool tip says |reason|.
+    void setVolumeAvailable(bool available, const QString& reason);
+    bool volumeAvailable() const { return mVolumeAvailable; }
+    // A short note under the screenshot button that goes away by itself, as
+    // when a screenshot was not saved; it does not stop anything.
+    void showScreenshotNotice(const QString& text);
     QPushButton* backButton() const { return mBack; }
     QPushButton* homeButton() const { return mHome; }
     QPushButton* minimizeButton() const { return mMinimize; }
@@ -61,6 +72,10 @@ public:
     // |down|, with its tool tip after a while.
     void setMaximizeButtonMouse(bool hot, bool down);
 
+signals:
+    // setButtonsEnabled(false), as the safe shutdown begins.
+    void buttonsDisabled();
+
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -74,6 +89,10 @@ private:
     QWidget* mWindow;
     QLabel* mIcon = nullptr;
     QLabel* mTitle = nullptr;
+    QPushButton* mScreenshot = nullptr;
+    QPushButton* mVolume = nullptr;
+    bool mVolumeAvailable = true;
+    bool mButtonsEnabled = true;
     QPushButton* mBack = nullptr;
     QPushButton* mHome = nullptr;
     QFrame* mDivider = nullptr;

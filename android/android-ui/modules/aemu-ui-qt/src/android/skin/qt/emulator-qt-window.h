@@ -512,6 +512,9 @@ private:
     QPixmap mRotatedScreenMaskPixmap;
     bool mScreenMaskChanged = true;
     void updateScreenMask();
+    // A screenshot was not saved: the full toolbar shows |dialogText| in a
+    // dialog, the lean one a short note in Chinese that blocks nothing.
+    void screenshotFailed(const QString& dialogText);
 
     static const std::string_view kRemoteDownloadsDir;
     static const std::string_view kRemoteDownloadsDirApi10;

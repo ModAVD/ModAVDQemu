@@ -5,12 +5,14 @@ android_add_library(
   LICENSE Apache-2.0
   SOURCE_DIR src
   INCLUDES include
-  SRC android/instance-window-title.c android/lean-window-frame.cpp)
+  SRC android/instance-window-title.c android/lean-title-bar-logic.cpp
+      android/lean-window-frame.cpp)
 
 android_add_test(
   TARGET aemu-ui-lean-window_unittests
   SOURCE_DIR test
   SRC android/instance-window-title_unittest.cpp
+      android/lean-title-bar-logic_unittest.cpp
       android/lean-window-frame_unittest.cpp
   DEPS aemu-ui-lean-window gmock_main)
 

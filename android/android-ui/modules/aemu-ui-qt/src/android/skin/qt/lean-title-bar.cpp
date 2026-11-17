@@ -21,7 +21,9 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QPoint>
 #include <QPushButton>
+#include <QRect>
 #include <QResizeEvent>
 #include <QSize>
 #include <QStyle>
@@ -30,6 +32,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "android/lean-title-bar-logic.h"
 #include "android/lean-window-frame.h"
 
 namespace {
@@ -53,7 +56,8 @@ constexpr int kWindowIconSize = 16;
 
 }  // namespace
 
-LeanTitleBar::LeanTitleBar(QWidget* window) : QWidget(window), mWindow(window) {
+LeanTitleBar::LeanTitleBar(QWidget* window, bool volumeShown)
+    : QWidget(window), mWindow(window) {
     setObjectName(QStringLiteral("leanTitleBar"));
     setAttribute(Qt::WA_StyledBackground);
     setStyleSheet(QString::fromLatin1(kStyle));
@@ -75,6 +79,14 @@ LeanTitleBar::LeanTitleBar(QWidget* window) : QWidget(window), mWindow(window) {
     mTitle->setTextFormat(Qt::PlainText);
     layout->addWidget(mTitle, 1, Qt::AlignVCenter);
 
+    // The screenshot and volume icons are drawn at the window buttons' size,
+    // as on the side toolbar.
+    mScreenshot = addButton("screen_shot", QString::fromUtf8("截图"),
+                            kWindowIconSize);
+    if (volumeShown) {
+        mVolume = addButton("volume_up", QString::fromUtf8("音量"),
+                            kWindowIconSize);
+    }
     mBack = addButton("back", QString::fromUtf8("返回"), kNavIconSize);
     mHome = addButton("home", QString::fromUtf8("桌面"), kNavIconSize);
     mDivider = new QFrame(this);
@@ -85,14 +97,37 @@ LeanTitleBar::LeanTitleBar(QWidget* window) : QWidget(window), mWindow(window) {
                           kWindowIconSize);
     mClose = addButton("close", QString::fromUtf8("关机"), kWindowIconSize);
 
-    layout->addWidget(mBack);
-    layout->addWidget(mHome);
-    layout->addSpacing(4);
-    layout->addWidget(mDivider, 0, Qt::AlignVCenter);
-    layout->addSpacing(4);
-    layout->addWidget(mMinimize);
-    layout->addWidget(mMaximize);
-    layout->addWidget(mClose);
+    using android::lean_title_bar::Item;
+    for (Item item : android::lean_title_bar::items(volumeShown)) {
+        switch (item) {
+            case Item::Screenshot:
+                layout->addWidget(mScreenshot);
+                break;
+            case Item::Volume:
+                layout->addWidget(mVolume);
+                break;
+            case Item::Back:
+                layout->addWidget(mBack);
+                break;
+            case Item::Home:
+                layout->addWidget(mHome);
+                break;
+            case Item::Divider:
+                layout->addSpacing(4);
+                layout->addWidget(mDivider, 0, Qt::AlignVCenter);
+                layout->addSpacing(4);
+                break;
+            case Item::Minimize:
+                layout->addWidget(mMinimize);
+                break;
+            case Item::Maximize:
+                layout->addWidget(mMaximize);
+                break;
+            case Item::Close:
+                layout->addWidget(mClose);
+                break;
+        }
+    }
 
     // The tool tip of the maximize / restore button while the window sees
     // the mouse over it: Qt shows none for a widget it gets no mouse events
@@ -124,10 +159,12 @@ QPushButton* LeanTitleBar::addButton(const char* icon,
 
 int LeanTitleBar::buttonsLeft() const {
     // The first button shown; back or home may be hidden for some AVDs.
-    for (QWidget* widget : {static_cast<QWidget*>(mBack),
+    for (QWidget* widget : {static_cast<QWidget*>(mScreenshot),
+                            static_cast<QWidget*>(mVolume),
+                            static_cast<QWidget*>(mBack),
                             static_cast<QWidget*>(mHome),
                             static_cast<QWidget*>(mDivider)}) {
-        if (!widget->isHidden()) {
+        if (widget && !widget->isHidden()) {
             return widget->x();
         }
     }
@@ -135,12 +172,36 @@ int LeanTitleBar::buttonsLeft() const {
 }
 
 void LeanTitleBar::setButtonsEnabled(bool enabled) {
-    for (QPushButton* button : {mBack, mHome, mMinimize, mMaximize, mClose}) {
+    mButtonsEnabled = enabled;
+    for (QPushButton* button :
+         {mScreenshot, mBack, mHome, mMinimize, mMaximize, mClose}) {
         button->setEnabled(enabled);
+    }
+    if (mVolume) {
+        mVolume->setEnabled(enabled && mVolumeAvailable);
     }
     if (!enabled) {
         setMaximizeButtonMouse(false, false);
+        emit buttonsDisabled();
     }
+}
+
+void LeanTitleBar::setVolumeAvailable(bool available, const QString& reason) {
+    mVolumeAvailable = available;
+    if (!mVolume) {
+        return;
+    }
+    mVolume->setEnabled(mButtonsEnabled && available);
+    const QString tip = available ? QString::fromUtf8("音量") : reason;
+    mVolume->setToolTip(tip);
+    mVolume->setAccessibleName(tip);
+}
+
+void LeanTitleBar::showScreenshotNotice(const QString& text) {
+    constexpr int kNoticeMs = 4000;
+    QToolTip::showText(
+            mScreenshot->mapToGlobal(QPoint(0, mScreenshot->height())), text,
+            mScreenshot, QRect(), kNoticeMs);
 }
 
 void LeanTitleBar::setMaximizedQuery(std::function<bool()> query) {

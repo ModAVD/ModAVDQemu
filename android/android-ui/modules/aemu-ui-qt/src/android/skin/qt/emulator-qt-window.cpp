@@ -58,6 +58,7 @@
 #include "android/skin/qt/extended-pages/snapshot-page.h"
 #include "android/skin/qt/extended-pages/telephony-controller.h"
 #include "android/skin/qt/extended-pages/telephony-page.h"
+#include "android/skin/qt/lean-title-bar.h"
 #include "android/skin/qt/multi-display-widget.h"
 #include "android/skin/qt/native-keyboard-event-handler.h"
 #include "android/skin/qt/qt-keycode.h"
@@ -2918,13 +2919,29 @@ void EmulatorQtWindow::slot_scrollRangeChanged(int min, int max) {
                              mContainer.verticalScrollBar()->value());
 }
 
+void EmulatorQtWindow::screenshotFailed(const QString& dialogText) {
+    if (!mToolWindow->isLeanToolbar()) {
+        showErrorDialog(dialogText, tr("Screenshot"));
+        return;
+    }
+    // The lean window says it in a short note that goes away by itself
+    // (ModAVD#231): no dialog to dismiss.
+    const QString text = QString::fromUtf8("截图没存上");
+    if (LeanTitleBar* titleBar = mToolWindow->leanTitleBar()) {
+        titleBar->showScreenshotNotice(text);
+    } else {
+        constexpr int kNoticeMs = 4000;
+        mContainer.messageCenter().addMessage(
+                text, Ui::OverlayMessageType::Error, kNoticeMs);
+    }
+}
+
 void EmulatorQtWindow::screenshot() {
     QString savePath = getScreenshotSaveDirectory();
     if (savePath.isEmpty()) {
-        showErrorDialog(tr("The screenshot save location is not set.<br/>"
-                           "Check the settings page and ensure the directory "
-                           "exists and is writeable."),
-                        tr("Screenshot"));
+        screenshotFailed(tr("The screenshot save location is not set.<br/>"
+                            "Check the settings page and ensure the directory "
+                            "exists and is writeable."));
         return;
     }
 
@@ -2943,7 +2960,7 @@ void EmulatorQtWindow::screenshot() {
 
     const auto uiAgent = mToolWindow->getUiEmuAgent();
     if (!uiAgent->record->doSnap(savePath.toStdString().c_str(), displayId)) {
-        showErrorDialog(tr("Screenshot failed"), tr("Screenshot"));
+        screenshotFailed(tr("Screenshot failed"));
     } else {
         // Display the flash animation immediately as feedback - if it fails, an
         // error dialog will indicate as such.
