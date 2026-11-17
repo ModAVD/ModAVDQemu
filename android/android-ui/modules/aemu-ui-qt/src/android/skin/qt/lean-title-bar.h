@@ -14,7 +14,6 @@
 #pragma once
 
 #include <QString>
-#include <QTimer>
 #include <QWidget>
 
 #include <functional>
@@ -49,7 +48,7 @@ public:
     // Null without sound.
     QPushButton* volumeButton() const { return mVolume; }
     // Whether the volume button can be used: without adb it is disabled
-    // and its tool tip says |reason|.
+    // and its tool tip says |reason| (the only title bar button with one).
     void setVolumeAvailable(bool available, const QString& reason);
     bool volumeAvailable() const { return mVolumeAvailable; }
     // A short note under the screenshot button that goes away by itself, as
@@ -69,7 +68,7 @@ public:
     void updateMaximizeButton();
     // The mouse over the maximize / restore button when the window, not Qt,
     // sees it (WindowsLeanFrame): highlighted while |hot|, pressed while
-    // |down|, with its tool tip after a while.
+    // |down|.
     void setMaximizeButtonMouse(bool hot, bool down);
 
 protected:
@@ -80,7 +79,6 @@ private:
     QPushButton* addButton(const char* icon, const QString& tip, int iconSize);
     void updateTitle();
     void updateIcon();
-    void showMaximizeToolTip();
 
     QWidget* mWindow;
     QLabel* mIcon = nullptr;
@@ -99,5 +97,4 @@ private:
     // Whether the button shows restore.
     bool mShowsRestore = false;
     bool mMaximizeHot = false;
-    QTimer mMaximizeTipTimer;
 };

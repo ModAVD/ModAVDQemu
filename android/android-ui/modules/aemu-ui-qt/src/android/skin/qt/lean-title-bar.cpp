@@ -129,13 +129,6 @@ LeanTitleBar::LeanTitleBar(QWidget* window, bool volumeShown)
         }
     }
 
-    // The tool tip of the maximize / restore button while the window sees
-    // the mouse over it: Qt shows none for a widget it gets no mouse events
-    // for.
-    mMaximizeTipTimer.setSingleShot(true);
-    connect(&mMaximizeTipTimer, &QTimer::timeout, this,
-            &LeanTitleBar::showMaximizeToolTip);
-
     mWindow->installEventFilter(this);
     updateTitle();
     updateIcon();
@@ -152,7 +145,8 @@ QPushButton* LeanTitleBar::addButton(const char* icon,
     // The dark theme's icons are drawn light.
     button->setIcon(QIcon(QStringLiteral(":/dark/") + QLatin1String(icon)));
     button->setIconSize(QSize(iconSize, iconSize));
-    button->setToolTip(tip);
+    // No hover tool tip on the title bar buttons (the icons say it); the
+    // name is still there for screen readers and UI Automation.
     button->setAccessibleName(tip);
     return button;
 }
@@ -191,9 +185,9 @@ void LeanTitleBar::setVolumeAvailable(bool available, const QString& reason) {
         return;
     }
     mVolume->setEnabled(mButtonsEnabled && available);
-    const QString tip = available ? QString::fromUtf8("音量") : reason;
-    mVolume->setToolTip(tip);
-    mVolume->setAccessibleName(tip);
+    // Only a greyed-out button says why on hover.
+    mVolume->setToolTip(available ? QString() : reason);
+    mVolume->setAccessibleName(available ? QString::fromUtf8("音量") : reason);
 }
 
 void LeanTitleBar::showScreenshotNotice(const QString& text) {
@@ -223,12 +217,8 @@ void LeanTitleBar::updateMaximizeButton() {
     // The dark theme's icons are drawn light, as in addButton().
     mMaximize->setIcon(QIcon(restore ? QStringLiteral(":/dark/window_restore")
                                      : QStringLiteral(":/dark/window_maximize")));
-    mMaximize->setToolTip(tip);
     // Screen readers and UI Automation hear of the new name.
     mMaximize->setAccessibleName(tip);
-    if (QToolTip::isVisible() && mMaximizeHot) {
-        showMaximizeToolTip();
-    }
 }
 
 void LeanTitleBar::setMaximizeButtonMouse(bool hot, bool down) {
@@ -242,26 +232,11 @@ void LeanTitleBar::setMaximizeButtonMouse(bool hot, bool down) {
         // A style sheet reads a dynamic property only when polished again.
         mMaximize->style()->unpolish(mMaximize);
         mMaximize->style()->polish(mMaximize);
-        if (hot) {
-            mMaximizeTipTimer.start(
-                    style()->styleHint(QStyle::SH_ToolTip_WakeUpDelay));
-        } else {
-            mMaximizeTipTimer.stop();
-            if (QToolTip::isVisible() && QToolTip::text() == mMaximize->toolTip()) {
-                QToolTip::hideText();
-            }
-        }
     }
     if (down != mMaximize->isDown()) {
         mMaximize->setDown(down);
     }
     mMaximize->update();
-}
-
-void LeanTitleBar::showMaximizeToolTip() {
-    if (mMaximizeHot) {
-        QToolTip::showText(QCursor::pos(), mMaximize->toolTip(), mMaximize);
-    }
 }
 
 bool LeanTitleBar::eventFilter(QObject* watched, QEvent* event) {
