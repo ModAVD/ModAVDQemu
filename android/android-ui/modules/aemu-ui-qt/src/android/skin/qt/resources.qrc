@@ -289,8 +289,6 @@
         <!-- The lean title bar's maximize / restore button (ModAVD#185) -->
         <file alias="window_maximize">images/dark/ic_window_maximize_white_48dp.svg</file>
         <file alias="window_restore">images/dark/ic_window_restore_white_48dp.svg</file>
-        <!-- The lean volume popup's speaker while muted (ModAVD#226) -->
-        <file alias="volume_off_lean">images/dark/ic_volume_off_lean_16px.svg</file>
         <file alias="more">images/dark/ic_more_horiz_white_48dp.svg</file>
         <file alias="overview">images/dark/System_Overview_white.svg</file>
         <file alias="meta">images/dark/meta.svg</file>

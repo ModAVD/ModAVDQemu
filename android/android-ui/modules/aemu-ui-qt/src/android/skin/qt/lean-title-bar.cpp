@@ -182,7 +182,6 @@ void LeanTitleBar::setButtonsEnabled(bool enabled) {
     }
     if (!enabled) {
         setMaximizeButtonMouse(false, false);
-        emit buttonsDisabled();
     }
 }
 

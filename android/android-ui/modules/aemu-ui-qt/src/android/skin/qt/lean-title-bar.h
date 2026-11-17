@@ -72,10 +72,6 @@ public:
     // |down|, with its tool tip after a while.
     void setMaximizeButtonMouse(bool hot, bool down);
 
-signals:
-    // setButtonsEnabled(false), as the safe shutdown begins.
-    void buttonsDisabled();
-
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
